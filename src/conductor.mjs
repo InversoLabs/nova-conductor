@@ -4,7 +4,7 @@ import path from 'node:path';
 import { preservePlannerBaseline, atomic, snapshot, assertRoleChanges, nextPhase, rolePrompt, roleInstructions, readText, saveReview, reviewDecision, normalizeReview } from './workflow.mjs';
 import { startServer, killTree, sleep, openViewer, runChecks } from './runtime.mjs';
 import { fileURLToPath } from 'node:url';
-import {loadProvider,saveProvider,listModels} from './providers.mjs';
+import {loadProvider,saveProvider,listModels,providerDefaults,validateProvider} from './providers.mjs';
 import {BuilderProgress,productSignature,interruptBeforeRecovery} from './progress.mjs';
 
 const original=JSON.parse(fs.readFileSync(new URL('../infrastructure/nova-codex-models.json',import.meta.url))).models[0].base_instructions;
@@ -51,7 +51,7 @@ export function reopen(root,feedback,role='BUILDER') {
 }
 export function isBusy(error) { return /\b429\b|Too Many Requests|inference is busy/i.test(error.message); }
 export function isDisconnect(error) { return /stream (?:disconnected|closed)|response\.completed|Codex.*disconnect|ECONNRESET|ECONNREFUSED|socket hang up|connection.*(?:closed|reset)/i.test(error.message); }
-export async function run(root,{visible=true,start=startServer,check=runChecks}={}) {
+export async function run(root,{visible=true,start=startServer,check=runChecks,provider=loadProvider()}={}) {
   root=fs.realpathSync(root); const work=path.join(root,'work'), stateFile=path.join(root,'state.json');
   const lock=path.join(root,'conductor.lock');
   if(fs.existsSync(lock)) {
@@ -62,6 +62,7 @@ export async function run(root,{visible=true,start=startServer,check=runChecks}=
   fs.writeFileSync(lock,String(process.pid),{flag:'wx'});
   let server, stopped=false, active, watcher;
   const state=JSON.parse(fs.readFileSync(stateFile,'utf8'));
+  state.config.provider=validateProvider(provider);
   // Migrate the former default only; retain explicitly customized deadlines.
   if(state.config.roleTimeoutMs===10*60*1000){
     state.config.roleTimeoutMs=30*60*1000;
@@ -310,7 +311,8 @@ export async function run(root,{visible=true,start=startServer,check=runChecks}=
 if(process.argv[1] && path.resolve(process.argv[1])===fileURLToPath(import.meta.url)) {
   const [command,root,...args]=process.argv.slice(2);
   try {
-    if(command==='provider') {if(root)saveProvider({kind:root,baseUrl:args[0],keyEnv:args[1]});console.log(JSON.stringify(loadProvider(),null,2));}
+    if(command==='provider') {if(root)saveProvider({...providerDefaults(root),kind:root,...(args[0]?{baseUrl:args[0]}:{}),...(args[1]!==undefined?{keyEnv:args[1]}:{})});console.log(JSON.stringify(loadProvider(),null,2));}
+    else if(command==='provider-defaults'){console.log(JSON.stringify(providerDefaults(root)));}
     else if(command==='models') {console.log(JSON.stringify(await listModels(loadProvider())));}
     else if(command==='set-provider') {
       const lock=path.join(root,'conductor.lock');let held=false;

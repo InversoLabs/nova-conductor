@@ -40,8 +40,9 @@ function Read-Project {
 function Start-Project {
     param([string]$Root)
     $state=Get-Content -LiteralPath (Join-Path $Root 'state.json') -Raw | ConvertFrom-Json
-    $keyName=$state.config.provider.keyEnv
-    if(-not $state.config.provider){$keyName='NOVA_DESKTOP_API_KEY'}
+    $selectedProvider=& node $cli provider | ConvertFrom-Json
+    if($LASTEXITCODE -ne 0){throw 'Cannot read global provider settings.'}
+    $keyName=$selectedProvider.keyEnv
     $prior=$null
     if($keyName){$prior=[Environment]::GetEnvironmentVariable($keyName,'Process')}
     try {
@@ -57,10 +58,13 @@ function Start-Project {
 function Set-Provider {
     Write-Host '1 Ollama | 2 LM Studio | 3 Other Responses-compatible provider | 4 NOVA bridge'
     $kind=switch(Read-Host 'Provider'){'1'{'ollama'} '2'{'lmstudio'} '3'{'custom'} '4'{'nova'} default{throw 'Choose 1, 2, 3, or 4.'}}
-    $default=switch($kind){'ollama'{'http://127.0.0.1:11434/v1'} 'lmstudio'{'http://127.0.0.1:1234/v1'} 'nova'{'http://127.0.0.1:8787/v1'} default{''}}
-    $url=(Read-Host "API base URL including /v1 (Enter: $default)").Trim()
+    $saved=& node $cli provider-defaults $kind | ConvertFrom-Json
+    if($LASTEXITCODE -ne 0){throw 'Cannot read provider defaults.'}
+    $default=$saved.baseUrl
+    $url=(Read-Host "API base URL including /v1 (Enter keeps $default)").Trim()
     if(-not $url){$url=$default}
-    $keyName=(Read-Host 'API key environment variable NAME (Enter for no authentication; do not paste a key)').Trim()
+    $keyName=(Read-Host "API key variable NAME (Enter keeps '$($saved.keyEnv)'; - means no authentication)").Trim()
+    if(-not $keyName){$keyName=$saved.keyEnv}elseif($keyName -eq '-'){$keyName=''}
     & node $cli provider $kind $url $keyName
     if($LASTEXITCODE -ne 0){throw 'Invalid provider configuration.'}
 }
@@ -71,8 +75,8 @@ while($true){
     Write-Host 'Prompt > Planner > Builder > Reviewer > checklist > Builder'
     Write-Host 'Each role opens a fresh 16K session in the native Codex window.'
     $provider=(& node $cli provider | ConvertFrom-Json)
-    Write-Host "New-project provider: $($provider.kind) at $($provider.baseUrl)"
-    Write-Host "1 New project  |  2 Continue  |  3 Status  |  4 Stop  |  5 Projects  |  6 Model ($model)  |  7 Reopen  |  8 Provider settings  |  9 Change project provider  |  I Import existing codebase  |  Q Quit"
+    Write-Host "Global provider: $($provider.kind) at $($provider.baseUrl)"
+    Write-Host "1 New project  |  2 Continue  |  3 Status  |  4 Stop  |  5 Projects  |  6 Model ($model)  |  7 Reopen  |  8 Global provider settings  |  9 Global provider settings  |  I Import existing codebase  |  Q Quit"
     try {
         switch((Read-Host 'Choose').ToUpperInvariant()){
             '1' {
@@ -104,10 +108,7 @@ while($true){
             '5' {New-Item -ItemType Directory -Path $projects -Force | Out-Null; Start-Process explorer.exe -ArgumentList ('"'+$projects+'"')}
             '6' {$model=Select-Model -Current $model}
             '8' {Set-Provider}
-            '9' {
-                $selected=Read-Project
-                if($selected){Set-Provider;$model=Select-Model -Current $model;& node $cli set-provider $selected $model;if($LASTEXITCODE -ne 0){throw 'Could not update project provider.'}}
-            }
+            '9' {Set-Provider}
             '7' {
                 $selected=Read-Project
                 if($selected){

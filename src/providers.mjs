@@ -13,7 +13,18 @@ export function validateProvider(value){
 }
 export function providerFile(){return process.env.NOVA_CONDUCTOR_PROVIDER_FILE || path.join(process.env.LOCALAPPDATA || path.join(os.homedir(),'.config'),'NovaConductor','provider.json');}
 export function loadProvider(){const file=providerFile();return fs.existsSync(file)?validateProvider(JSON.parse(fs.readFileSync(file,'utf8'))):validateProvider({kind:'ollama'});}
-export function saveProvider(value){const p=validateProvider(value),file=providerFile();fs.mkdirSync(path.dirname(file),{recursive:true});fs.writeFileSync(file,JSON.stringify(p,null,2));return p;}
+export function providerDefaults(kind){
+ const current=loadProvider();if(current.kind===kind)return current;
+ const file=providerFile()+'.profiles.json';const profiles=fs.existsSync(file)?JSON.parse(fs.readFileSync(file,'utf8')):{};
+ return profiles[kind]?validateProvider(profiles[kind]):{kind,baseUrl:presets[kind]||'',keyEnv:''};
+}
+export function saveProvider(value){
+ const p=validateProvider(value),file=providerFile(),history=file+'.profiles.json';
+ fs.mkdirSync(path.dirname(file),{recursive:true});
+ const profiles=fs.existsSync(history)?JSON.parse(fs.readFileSync(history,'utf8')):{};
+ if(fs.existsSync(file)){const prior=loadProvider();profiles[prior.kind]=prior;}
+ profiles[p.kind]=p;fs.writeFileSync(history,JSON.stringify(profiles,null,2));fs.writeFileSync(file,JSON.stringify(p,null,2));return p;
+}
 export function providerKey(p,env=process.env){if(!p.keyEnv)return '';const key=env[p.keyEnv];if(!key)throw Error(`Set ${p.keyEnv} in this terminal before connecting to this provider`);return key;}
 export async function listModels(provider){
  const p=validateProvider(provider),key=providerKey(p);let r;
