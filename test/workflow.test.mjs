@@ -56,9 +56,10 @@ test('Markdown planner/build/review/revise cycle cannot PASS failed checks', t=>
   assert.equal(nextPhase('REVIEWER',work,{passed:true}),'BUILDER');
   assert.equal(snapshot(work)['REQUEST.md'],state.expected['REQUEST.md']);
 });
-test('role boundaries reject product edits by reviewer and plan edits by builder',()=>{
+test('role boundaries reject product edits by reviewer and requirement edits by builder',()=>{
   assert.throws(()=>assertRoleChanges('REVIEWER',{'index.html':'old'},{'index.html':'new'}),/unauthorized/);
-  assert.throws(()=>assertRoleChanges('BUILDER',{'BUILD_PLAN.md':'old'},{'BUILD_PLAN.md':'new'}),/protected/);
+  assert.doesNotThrow(()=>assertRoleChanges('BUILDER',{'BUILD_PLAN.md':'old'},{'BUILD_PLAN.md':'new'}));
+  assert.throws(()=>assertRoleChanges('BUILDER',{'REQUEST.md':'old'},{'REQUEST.md':'new'}),/protected/);
   assert.doesNotThrow(()=>assertRoleChanges('REVIEWER',{}, {'BUILD_CHECKLIST.md':'new'}));
   assert.equal(reviewDecision('Looks good!'),null);
   const prompt=rolePrompt({role:'REVIEWER',config:{verification:[['node','--test']]}});

@@ -23,7 +23,7 @@ export function snapshot(work) {
 export function assertRoleChanges(role,before,after) {
   const allowed = role==='PLANNER' ? ['AGENTS.md','BUILD_PLAN.md'] : role==='REVIEWER' ? ['REVIEW.md','BUILD_CHECKLIST.md'] : null;
   if (!allowed) {
-    for (const file of ['AGENTS.md','BUILD_PLAN.md','REVIEW.md','REQUEST.md']) if (before[file]!==after[file]) throw Error(`Builder changed protected requirement/review file: ${file}`);
+    for (const file of ['AGENTS.md','REVIEW.md','REQUEST.md']) if (before[file]!==after[file]) throw Error(`Builder changed protected requirement/review file: ${file}`);
     return;
   }
   for (const file of new Set([...Object.keys(before),...Object.keys(after)])) if(before[file]!==after[file]&&!allowed.includes(file)) throw Error(`${role} changed an unauthorized project file: ${file}`);
@@ -88,8 +88,8 @@ export function rolePrompt(state) {
   const handoff=workerHandoff(state);
   const feedback=handoff ? `\nProject guidance: ${handoff.slice(0,3500)}\n` : '';
   const roles={
-    PLANNER:'Plan the requested product. Use file-writing tools to save only AGENTS.md (project constraints and file conventions) and BUILD_PLAN.md (concrete requested requirements, ordered implementation steps, and acceptance checks). In AGENTS.md, state that builders must not edit REQUEST.md, AGENTS.md, BUILD_PLAN.md, or REVIEW.md; generated-file lists, progress, and verification results belong in BUILD_NOTES.md, and repair progress belongs in BUILD_CHECKLIST.md. Inspect existing project files when relevant. Choose the simplest suitable implementation; include build commands only when needed and checks proportionate to the task. Do not invent requirements, agent teams, or placeholder plans. Do not build the product yet. Read back both saved files and confirm they match the request before handing off.',
-    BUILDER:'Read AGENTS.md, BUILD_PLAN.md, and any BUILD_CHECKLIST.md; inspect existing work. Use tools to implement the remaining requirements and reviewer repairs, following any latest user guidance. Continue until the requested work is complete or a concrete blocker prevents progress. Check the actual result with proportionate tests; use existing checks where suitable, without adding unnecessary testing infrastructure. Record generated files, verified results, and any unfinished work or blocker in BUILD_NOTES.md; update repair progress in BUILD_CHECKLIST.md. Do not edit REQUEST.md, AGENTS.md, BUILD_PLAN.md, or REVIEW.md, even if project notes ask you to record progress there. If the plan contradicts the request, report the conflict rather than implementing unrelated work.',
+    PLANNER:'Plan the requested product. Use file-writing tools to save only AGENTS.md (project constraints and file conventions) and BUILD_PLAN.md (concrete requested requirements, ordered implementation steps, and acceptance checks). In AGENTS.md, state that builders must not edit REQUEST.md, AGENTS.md, or REVIEW.md; generated-file lists, progress, and verification results belong in BUILD_NOTES.md, and repair progress belongs in BUILD_CHECKLIST.md. Inspect existing project files when relevant. Choose the simplest suitable implementation; include build commands only when needed and checks proportionate to the task. Do not invent requirements, agent teams, or placeholder plans. Do not build the product yet. Read back both saved files and confirm they match the request before handing off.',
+    BUILDER:'Read AGENTS.md, BUILD_PLAN.md, and any BUILD_CHECKLIST.md; inspect existing work. Use tools to implement the remaining requirements and reviewer repairs, following any latest user guidance. Continue until the requested work is complete or a concrete blocker prevents progress. Check the actual result with proportionate tests; use existing checks where suitable, without adding unnecessary testing infrastructure. Record generated files, verified results, and any unfinished work or blocker in BUILD_NOTES.md; update repair progress in BUILD_CHECKLIST.md. You may update BUILD_PLAN.md to reflect the implementation, even if existing project notes call it read-only; preserve the original requirements. Do not edit REQUEST.md, AGENTS.md, or REVIEW.md. If the plan contradicts the request, report the conflict rather than implementing unrelated work.',
     REVIEWER:"Inspect the actual product read-only against EVERY original requirement and the relevant build-plan checks. Read the files and independently check behavior with available tools; builder reports and passing tests alone do not prove completion. For visual work, inspect the rendered result when possible; state any verification you could not perform. Return '# PASS' only when all required work is verified, otherwise '# REVISE', followed by concise evidence and gaps. For REVISE add '## Checklist' with ordered '- [ ]' concrete repairs and how to verify each. Do not turn optional improvements into requirements. Do not edit files; Conductor saves your final response as the review and checklist."
   };
   const buildTask=state.role==='BUILDER' ? {
@@ -97,9 +97,15 @@ export function rolePrompt(state) {
     repair:'\nBuild mode: reviewer repairs. Read REVIEW.md and BUILD_CHECKLIST.md. Fix the listed gaps, preserve working behavior, and verify each repair. Then check the original requirements before handing back for review.',
     user:'\nBuild mode: user-directed changes. Follow the user guidance in BUILD_CHECKLIST.md; it supersedes the previous review. Preserve working behavior and verify the requested changes.'
   }[builderMode(state)] : '';
-  return common+buildTask+'\n'+roles[state.role]+verification+feedback;
+  return common+buildTask+'\n'+roles[state.role]+verification+feedback+(state.role==='REVIEWER'&&state.plannerBaseline?'\nRead ../planner-baseline.md for the original planner requirements. BUILD_PLAN.md may contain builder updates; those updates cannot remove original acceptance requirements.':'');
 }
 export function roleInstructions(role, original) {
   if(role==='BUILDER') return original;
   return `You are the project ${role.toLowerCase()} using Codex tools on Windows PowerShell. Follow the original user request and this role's file boundaries. Leave a concise Markdown handoff.`;
+}
+
+export function preservePlannerBaseline(root,state){
+  const baseline=path.join(root,'planner-baseline.md'),plan=path.join(root,'work','BUILD_PLAN.md');
+  if(state.role==='BUILDER'&&!fs.existsSync(baseline)&&fs.existsSync(plan))fs.copyFileSync(plan,baseline,fs.constants.COPYFILE_EXCL);
+  if(fs.existsSync(baseline))state.plannerBaseline=true;
 }

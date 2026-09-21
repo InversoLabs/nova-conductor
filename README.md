@@ -174,3 +174,5 @@ It checks a real file edit and tool-result round trip without NOVA Desktop,
 SSH, credentials, or model inference. This is not a model-quality benchmark
 or a claim of live Ollama/LM Studio validation. Temporary smoke files remain in
 TEMP for diagnosis. Test a small project with your actual provider/model first.
+
+Builders may update BUILD_PLAN.md without stopping the run. Conductor saves the original plan in planner-baseline.md outside the work folder; reviewers use it alongside REQUEST.md to retain the original acceptance requirements.

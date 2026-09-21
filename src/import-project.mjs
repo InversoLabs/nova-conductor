@@ -37,7 +37,7 @@ export function importProject(root,source,prompt,model,initialize) {
       fs.mkdirSync(path.dirname(target),{recursive:true});
       fs.copyFileSync(path.join(source,file),target,fs.constants.COPYFILE_EXCL);
     }
-    if(!fs.existsSync(path.join(work,'AGENTS.md')))fs.writeFileSync(path.join(work,'AGENTS.md'),'# Existing project\nPreserve existing architecture, conventions, and working behavior. Follow REQUEST.md. Record changes and checks in BUILD_NOTES.md. Keep REQUEST.md, AGENTS.md, BUILD_PLAN.md, and REVIEW.md unchanged.\n');
+    if(!fs.existsSync(path.join(work,'AGENTS.md')))fs.writeFileSync(path.join(work,'AGENTS.md'),'# Existing project\nPreserve existing architecture, conventions, and working behavior. Follow REQUEST.md. Record changes and checks in BUILD_NOTES.md. Keep REQUEST.md, AGENTS.md, and REVIEW.md unchanged.\n');
     fs.writeFileSync(path.join(work,'BUILD_PLAN.md'),'# Existing-codebase changes\n\n## Requested work\n'+prompt+'\n\n## Steps\n1. Inspect the existing implementation and relevant project instructions.\n2. Implement the requested changes while preserving unrelated behavior.\n3. Run suitable existing checks and verify the changed behavior.\n\n## Acceptance\nThe request is fulfilled, existing behavior is preserved, and actual verification results and limitations are recorded in BUILD_NOTES.md.\n');
     fs.writeFileSync(path.join(work,'BUILD_CHECKLIST.md'),'# User guidance\n\n'+prompt+'\n\n## Checklist\n- [ ] Inspect the existing codebase, implement the requested changes, and verify the result.\n');
     state.role='BUILDER';state.builderMode='user';state.importedFrom=source;

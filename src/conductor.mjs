@@ -1,7 +1,7 @@
 import {importProject} from './import-project.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
-import { atomic, snapshot, assertRoleChanges, nextPhase, rolePrompt, roleInstructions, readText, saveReview, reviewDecision, normalizeReview } from './workflow.mjs';
+import { preservePlannerBaseline, atomic, snapshot, assertRoleChanges, nextPhase, rolePrompt, roleInstructions, readText, saveReview, reviewDecision, normalizeReview } from './workflow.mjs';
 import { startServer, killTree, sleep, openViewer, runChecks } from './runtime.mjs';
 import { fileURLToPath } from 'node:url';
 import {loadProvider,saveProvider,listModels} from './providers.mjs';
@@ -117,6 +117,7 @@ export async function run(root,{visible=true,start=startServer,check=runChecks}=
       }
       if(!server)server=await start(root,state.config);
       if(JSON.stringify(snapshot(work))!==JSON.stringify(state.expected)) throw Error('Project changed between roles.');
+      preservePlannerBaseline(root,state);
       const role=state.role, id=String(state.runs.length+1).padStart(4,'0'), dir=path.join(root,'runs',id);
       fs.mkdirSync(dir);
       if(role==='REVIEWER' && fs.existsSync(path.join(work,'REVIEW.md'))) {
@@ -218,7 +219,7 @@ export async function run(root,{visible=true,start=startServer,check=runChecks}=
         const next=nextPhase(role,work,checks);
         if(role==='BUILDER') {
           if(productSignature(before)!==productSignature(after))state.progressRecoveries=0;
-          const product=Object.fromEntries(Object.entries(after).filter(([name])=>!['BUILD_NOTES.md','BUILD_CHECKLIST.md','REVIEW.md'].includes(name)));
+          const product=Object.fromEntries(Object.entries(after).filter(([name])=>!['BUILD_PLAN.md','BUILD_NOTES.md','BUILD_CHECKLIST.md','REVIEW.md'].includes(name)));
           const signature=JSON.stringify(product);
           state.stalledBuilds=signature===state.lastBuildSignature?state.stalledBuilds+1:0;
           state.lastBuildSignature=signature;
