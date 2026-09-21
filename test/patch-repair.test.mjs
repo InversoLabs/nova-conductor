@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createRequire} from 'node:module';
 const {repairAddFilePatch,createSseRepair}=createRequire(import.meta.url)('../infrastructure/nova-codex-repairs.cjs');
-const raw='*** Begin Patch\n*** Add File: AGENTS.md\n# Rules\n\n- Test the page\n*** End Patch';
+const raw='*** Begin Patch\n*** Add File: AGENTS.md\n# Rules\n\n- Test the page\n*** End Patch\n*** End Patch';
 test('repair only wholly unprefixed single-file additions',()=>{
   const result=repairAddFilePatch(raw);
   assert.equal(result,'*** Begin Patch\n*** Add File: AGENTS.md\n+# Rules\n+\n+- Test the page\n*** End Patch');

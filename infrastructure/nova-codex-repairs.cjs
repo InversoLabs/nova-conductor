@@ -3,12 +3,17 @@
 function repairAddFilePatch(text, report = () => {}) {
   if (typeof text !== 'string') return text;
   const lines = text.replace(/\r\n/g, '\n').split('\n');
+  let duplicateEnds=0;
+  while(lines.at(-1)==='*** End Patch' && lines.at(-2)==='*** End Patch'){
+    lines.pop();duplicateEnds++;
+  }
   if (lines[0] !== '*** Begin Patch' || lines.at(-1) !== '*** End Patch' || !lines[1]?.startsWith('*** Add File: ')) return text;
   const file = lines[1].slice(14), body = lines.slice(2,-1);
   // Only one new relative file with wholly unprefixed content. Mixed valid
   // prefixes, multiple operations, and updates remain Codex's responsibility.
   if (!file || file.includes(':') || file.startsWith('/') || file.startsWith('\\') || file.split(/[\\/]/).some(p=>!p||p==='.'||p==='..')) return text;
   if (!body.length || body.some(line=>line.startsWith('+') || line.startsWith('*** '))) return text;
+  if(duplicateEnds)report({rule:'add_file_duplicate_end_marker',tool:'apply_patch'});
   report({rule:'add_file_missing_plus_prefixes',tool:'apply_patch'});
   return [lines[0],lines[1],...body.map(line=>'+'+line),lines.at(-1)].join('\n');
 }
