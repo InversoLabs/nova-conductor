@@ -1,4 +1,6 @@
 const http = require('http');
+const https = require('https');
+const {adaptRequest,adaptResponse,createToolStream}=require('./provider-tools.cjs');
 const { repairExecArguments, createSseRepair, repairAddFilePatch } = require('./nova-codex-repairs.cjs');
 
 function reportRepair(event) {
@@ -8,8 +10,6 @@ function reportRepair(event) {
 
 const listenHost = '127.0.0.1';
 const listenPort = 8788;
-const upstreamHost = '192.168.86.51';
-const upstreamPort = 8787;
 
 function normalizePatch(value) {
   if (typeof value !== 'string') return value;
@@ -111,24 +111,41 @@ if (process.argv.includes('--self-test')) {
   process.exit(0);
 }
 
-const server = http.createServer((request, response) => {
+function createProxy(options = {}) {
+  const translateTools=['ollama','lmstudio'].includes(options.kind);
+  const target = new URL(options.baseUrl || 'http://127.0.0.1:11434/v1');
+  if(!['http:','https:'].includes(target.protocol) || target.username || target.password || target.search || target.hash) throw Error('Invalid proxy upstream URL');
+  const transport=target.protocol==='https:'?https:http;
+  const server = http.createServer((request, response) => {
+  if(options.clientToken && request.headers.authorization!=='Bearer '+options.clientToken){response.writeHead(401);response.end('Unauthorized');return;}
+  if(!['/v1/responses','/v1/models'].includes(request.url)){response.writeHead(404);response.end('Unsupported endpoint');return;}
   let knownTools = [];
   const forward = (requestBody) => {
-    const headers = { ...request.headers, host: `${upstreamHost}:${upstreamPort}` };
+    const headers = { ...request.headers, host: target.host, 'accept-encoding':'identity' };
+    if(options.clientToken){delete headers.authorization;if(options.apiKey)headers.authorization='Bearer '+options.apiKey;}
+    delete headers.connection;delete headers['transfer-encoding'];
     if (requestBody) headers['content-length'] = Buffer.byteLength(requestBody);
-    const upstream = http.request({ host: upstreamHost, port: upstreamPort, method: request.method, path: request.url, headers }, (remote) => {
+    const upstream = transport.request({ hostname:target.hostname, port:target.port || (target.protocol==='https:'?443:80), method: request.method, path:target.pathname.replace(/\/$/,'')+request.url.slice(3), headers }, (remote) => {
     const outgoingHeaders = { ...remote.headers };
     delete outgoingHeaders['content-length'];
+    delete outgoingHeaders['transfer-encoding'];delete outgoingHeaders.connection;
     response.writeHead(remote.statusCode || 502, outgoingHeaders);
     const contentType = String(remote.headers['content-type'] || '');
+    remote.on('error',()=>response.destroy());
+    remote.on('aborted',()=>response.destroy());
     if (contentType.includes('text/event-stream')) {
       const repair = createSseRepair({ repairPayload, report: reportRepair, knownTools });
+      const adapter=translateTools ? createToolStream() : null;
       remote.setEncoding('utf8');
+      remote.on('error',()=>response.destroy());
+      remote.on('aborted',()=>response.destroy());
       remote.on('data', (chunk) => {
-        const output = repair.push(chunk);
-        if (output) response.write(output);
+        try {
+          const output = repair.push(adapter ? adapter.push(chunk) : chunk);
+          if (output) response.write(output);
+        } catch {remote.destroy();response.destroy();}
       });
-      remote.on('end', () => { response.end(repair.end()); });
+      remote.on('end', () => {try{response.end((adapter ? repair.push(adapter.end()) : '')+repair.end());}catch{response.destroy();}});
       return;
     }
     const chunks = [];
@@ -136,7 +153,7 @@ const server = http.createServer((request, response) => {
     remote.on('end', () => {
       const body = Buffer.concat(chunks);
       if (contentType.includes('application/json')) {
-        try { return response.end(JSON.stringify(repairPayload(JSON.parse(body.toString('utf8'))))); } catch {}
+        try {let value=JSON.parse(body.toString('utf8'));if(translateTools)value=adaptResponse(value);return response.end(JSON.stringify(repairPayload(value))); } catch {response.destroy();return;}
       }
       response.end(body);
     });
@@ -151,7 +168,7 @@ const server = http.createServer((request, response) => {
     upstream.on('error', (error) => {
       if (response.destroyed) return;
       if (!response.headersSent) response.writeHead(502, { 'content-type': 'application/json' });
-      response.end(JSON.stringify({ error: { message: `NOVA-SERVER unavailable: ${error.message}`, code: 'nova_unavailable' } }));
+      response.end(JSON.stringify({ error: { message: 'Provider connection failed', code: 'provider_unavailable' } }));
     });
     if (requestBody) upstream.end(requestBody); else request.pipe(upstream);
   };
@@ -163,7 +180,8 @@ const server = http.createServer((request, response) => {
       try {
         const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
         knownTools = (body.tools || []).map(tool => tool.name).filter(Boolean);
-        forward(JSON.stringify(strengthenRequest(body)));
+        const prepared=options.kind==='custom'?body:strengthenRequest(body);
+        forward(JSON.stringify(translateTools ? adaptRequest(prepared) : prepared));
       } catch (error) {
         response.writeHead(400, { 'content-type': 'application/json' });
         response.end(JSON.stringify({ error: { message: `Invalid Responses request: ${error.message}` } }));
@@ -174,4 +192,10 @@ const server = http.createServer((request, response) => {
   forward(null);
 });
 
-server.listen(listenPort, listenHost, () => console.log(`NOVA Codex compatibility proxy: http://${listenHost}:${listenPort}`));
+return server;
+}
+module.exports={createProxy};
+if(require.main===module){
+ const server=createProxy({baseUrl:process.env.NOVA_PROXY_UPSTREAM || 'http://127.0.0.1:11434/v1',kind:process.env.NOVA_PROXY_KIND || 'ollama'});
+ server.listen(Number(process.env.NOVA_PROXY_PORT || listenPort),listenHost,()=>console.log('NOVA Codex compatibility proxy ready on loopback'));
+}

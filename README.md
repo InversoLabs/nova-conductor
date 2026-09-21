@@ -1,91 +1,152 @@
 # Nova Conductor
 
-Double-click **Start Conductor.cmd**, choose **1**, and enter your project name,
-prompt, and installed NOVA model. A separate **native Codex terminal** opens for
-the active role. Conductor's menu window shows the phase and remains the owner
-of the run. Closing the Codex display alone does not stop the work; use menu
-option **4** in another launcher window, or Ctrl+C in the Conductor window.
+Give Conductor a prompt. A planner writes the project instructions and build
+plan, a builder implements it, and a reviewer checks the result. When it needs
+work, the reviewer supplies a concrete checklist for the next builder session.
+Each role starts a fresh 16K Codex session, with files carrying the handoff.
+
+**NOVA Desktop and SSH are not required.** Conductor includes its launcher and
+compatibility proxy. Use Ollama, LM Studio, an existing NOVA bridge, or another
+Responses API provider. Native Codex renders the terminal, tools, colors, and
+reasoning summaries the selected model/provider exposes.
+
+## Download and run on Windows
+
+1. Install [Node.js 22 or newer](https://nodejs.org/), [Git for Windows](https://git-scm.com/downloads/win), and the [Codex CLI](https://developers.openai.com/codex/cli/).
+   The tested Codex version is **0.155.1**. Install it with:
+   ```powershell
+   npm install -g @openai/codex@0.155.1
+   ```
+2. Start your model server and load a model that supports tool calling.
+3. Download this repository using **Code → Download ZIP**, then extract it.
+   Alternatively: `git clone https://github.com/InversoLabs/nova-conductor.git`.
+4. Double-click **Start Conductor.cmd**. No `npm install` is needed in this folder.
+5. Choose **8 — Provider settings**, select your server, and enter its API URL.
+6. Choose **1 — New project**, enter a name and prompt, and select a model from
+   the server's list (or enter its exact model ID).
+
+This release uses Windows PowerShell and native Windows process management.
+macOS/Linux launchers are not included. Conductor does not bundle Codex, a model,
+or a model server. Local providers do not need a ChatGPT login or NOVA API key.
+
+## Providers
+
+| Selection | Default API URL | Setup |
+| --- | --- | --- |
+| Ollama | `http://127.0.0.1:11434/v1` | Start Ollama and pull a tool-capable model. Use a current version with Responses API support (introduced in 0.13.3). |
+| LM Studio | `http://127.0.0.1:1234/v1` | Load a tool-capable model, then start its local API server. |
+| Other | Enter your provider's URL | Must implement `/responses` with streaming and Codex-compatible tools. `/models` enables model discovery. |
+| NOVA bridge | `http://127.0.0.1:8787/v1` | Optional existing bridge. Enter its address and key environment variable. |
+
+URLs may point to another machine on your network. Include the API base path,
+usually `/v1`; do not enter the `/responses` or `/models` suffix. Providers that
+only implement `/chat/completions` are **not supported** by this release.
+
+Configure the model server for **at least 16,384 context tokens**. Conductor's
+client context setting does not resize the server's model context. In LM Studio,
+set context length when loading the model. For Ollama, use its context setting
+or a Modelfile with `PARAMETER num_ctx 16384`. Larger coding projects may exceed
+this deliberately small context budget. See [Ollama's API documentation](https://docs.ollama.com/api/openai-compatibility)
+and [LM Studio's Responses API](https://lmstudio.ai/docs/developer/openai-compat/responses).
+
+For an authenticated provider, save the **environment variable name**, not the
+key. For example, use `MY_MODEL_API_KEY`. Set that variable before launching, or
+the menu will ask for the key privately when a project starts. Model discovery
+needs the variable already set; manual model entry works when discovery fails.
+Keys are not written to provider settings or project state. Use HTTPS when
+sending credentials beyond a trusted local network.
+
+Defaults are stored in `%LOCALAPPDATA%\NovaConductor\provider.json`.
+Each new project saves its own provider and model settings. Changing the default
+does not redirect existing projects. Choose **9 — Change project provider** to
+change a stopped project's provider and model. Old projects without provider
+settings retain their legacy NOVA endpoint until migrated with this option.
+
+## Included proxy and native Codex
+
+Conductor starts a private loopback proxy on an available port for each run and
+stops it with the worker. The upstream API key stays in the controller process;
+the Codex child receives a separate temporary token for the local proxy.
+The proxy repairs supported malformed `apply_patch` and `exec_command` arguments
+without inventing commands or changing permissions. For Ollama and LM Studio,
+it translates Codex's freeform patch tool to a function tool and translates
+the streamed result back. Other Responses providers receive request fields
+unchanged; response argument repairs still apply.
+
+The app server listens on loopback port 8799. Only one Conductor model session
+runs at a time. Codex uses `%LOCALAPPDATA%\NOVA-Codex`, separate from your usual
+settings. On a fresh installation, the launcher enables Codex's Windows
+`unelevated` restricted-token sandbox; existing configuration is preserved.
+Planner and builder use workspace-write; reviewer uses read-only. Package
+downloads may be restricted by the sandbox. No full-access bypass is enabled.
+
+## Workflow and controls
 
 Projects live in `Documents\Nova Conductor Projects\NAME-TIMESTAMP`.
-The actual product is in `work`. Keep NOVA-SERVER and its bridge running.
-Only one model session runs at a time, using your launcher's existing mutex.
+The generated application is in the project's **work** folder.
 
-## The workflow
+1. Planner creates `AGENTS.md` and `BUILD_PLAN.md` against `REQUEST.md`.
+2. Builder implements the plan and records `BUILD_NOTES.md`.
+3. Reviewer checks requirements and returns `# PASS` or `# REVISE` with evidence.
+4. Conductor saves `REVIEW.md`; revisions become `BUILD_CHECKLIST.md` for a fresh builder.
+5. A reviewer PASS plus successful configured independent checks completes the run.
 
-1. A fresh **Planner** creates project-specific `AGENTS.md` and `BUILD_PLAN.md`.
-2. A fresh **Builder** implements the plan and records work in `BUILD_NOTES.md`.
-3. A fresh **Reviewer** checks the product read-only against `REQUEST.md` and the plan.
-4. If incomplete, the reviewer returns ordered actions and verification steps;
-   Conductor writes them to `BUILD_CHECKLIST.md`. A fresh builder works through them, then review repeats.
-5. A reviewer PASS plus successful configured independent checks ends the run. A PASS contradicted by checks returns to a fresh reviewer to write the missing repair checklist.
+The planner chooses appropriate checks; there is no mandatory test framework.
+Optional verification commands can be supplied as JSON argv arrays at creation.
+Those commands run outside the model sandbox against the generated project with
+a two-minute timeout. Tests do not establish visual quality; reviewers still
+need to inspect behavior and acceptance requirements.
 
-Every role uses `thread/start` with a new thread ID and a 16,384-token context.
-The terminal uses `codex --remote ... resume ID` solely to attach to that new
-thread; it does not reuse the preceding role's history. Codex itself renders
-its output, tools, colors, and any reasoning summaries it exposes. Conductor
-does not synthesize thinking text or replace the terminal with a JSON log view.
+- **Continue (2)** resumes a stopped run using its files.
+- **Stop (4)** stops the active run. Ctrl+C in the controller also stops it.
+- **Reopen (7)** lets you choose Planner, Builder, or Reviewer and supply guidance.
+  Product files are preserved; previous review/checklist/state are archived.
+- Interrupting a worker turn in the native Codex window pauses the role. Enter
+  guidance there to continue the same session. Closing the display alone does
+  not stop the controller; use Stop.
 
-Handoffs are files, not copied transcripts. `REQUEST.md` remains authoritative.
-The reviewer returns a final Markdown message beginning with `# PASS` or `# REVISE`, followed by evidence and, for revisions, a `## Checklist` section. Conductor saves `REVIEW.md` and replaces `BUILD_CHECKLIST.md`; the reviewer has a read-only sandbox. There is no JSON completion report and no formatting-agent loop.
-If a role fails twice to produce usable artifacts, Conductor stops for attention.
-New projects use sixty role sessions and a ten-minute per-role deadline. Builders work on at most three checklist items per turn. A timed-out builder is stopped before a fresh reviewer receives its preserved files and independent check results. At most three deadline recoveries are allowed. Three completed builder attempts without product changes stop for attention. Existing project deadlines are preserved. Continue also recovers projects stopped by the older builder-deadline behavior.
-
-Codex first applies its built-in stream retries. If those fail, Conductor
-preserves partial files and retries the same role in a fresh 16K session after
-5, 10, and 20 seconds (three recovery attempts). Disconnects have a separate
-budget from malformed handoffs. If the controller socket is lost, the owned
-server/worker tree is stopped before retrying, to avoid duplicate builders.
-The proxy repairs tool arguments; it does not replay partially delivered streams.
-
-## Verification and limits
-
-The planner chooses acceptance checks appropriate to the request; new projects have no mandatory test framework. You may enter additional command argv arrays when creating a project. Existing projects keep their configured checks, and explicitly requested tests remain requirements. Zero discovered Node tests does not count as success when Node verification is configured. An empty extra-command list is not evidence of product correctness: the reviewer must still execute and document the planned acceptance checks. No browser automation is added by this update. Verification runs outside the model sandbox on your trusted generated
-project, with a two-minute command limit. Reviewers must also inspect the actual
-behavior; tests alone do not prove a polished or complete product.
-
-Planner/reviewer file boundaries are checked after each turn. Unexpected changes
-are preserved and stop the run; Conductor never silently rolls them back.
-Planner and builder use Codex workspace-write permissions; reviewer uses read-only permissions. Package downloads can still be
-restricted by your configured Windows sandbox. This version does not widen it.
-An interrupted process with unrecorded changes may require inspection before
-resume; it does not silently adopt outside edits.
-
-The Codex app-server/remote interface is experimental in the installed CLI.
-This package is a Windows integration using Node 22+, PowerShell, Git, Codex,
-and your existing NOVA-SERVER SSH setup. It reuses the NOVA model catalog,
-launcher/provider settings, model warm-up, and compatibility proxy including
-apply_patch and narrow exec_command argument repairs. The app server binds
-only to loopback port 8799; the proxy uses 8788.
-
-The launcher reads your existing `NOVA_DESKTOP_API_KEY` environment variable or
-`Desktop\codex\nova_key.txt`; it does not copy credentials into projects.
-State, event history, checks, and phase prompts are stored outside `work`.
-Codex retains its native session history in the existing isolated NOVA home.
+New projects allow sixty role sessions, ten minutes per role, three disconnect
+recoveries, and three builder deadline recoveries. A timed-out reviewer stops
+for attention. Disconnect retries preserve partial files and start a fresh role
+session after 5, 10, and 20 seconds. The proxy does not replay partial streams.
+Role/file boundaries and outside edits are checked; unexpected changes are
+preserved and stop the run. The app-server/remote interface is experimental;
+use the tested Codex version when diagnosing regressions.
 
 ## CLI
 
+Run these commands from the extracted repository:
+
 ```powershell
-node src/conductor.mjs init PROJECT PROMPT_FILE gpt-oss:20b
-node src/conductor.mjs run PROJECT
-node src/conductor.mjs status PROJECT
-node src/conductor.mjs stop PROJECT
+node src/conductor.mjs provider ollama http://127.0.0.1:11434/v1
+# Or: node src/conductor.mjs provider lmstudio http://127.0.0.1:1234/v1
+# Or: node src/conductor.mjs provider custom https://provider.example/v1 MY_MODEL_API_KEY
+node src/conductor.mjs models
+node src/conductor.mjs init C:\Projects\MyProject C:\Projects\prompt.txt YOUR_MODEL_ID
+node src/conductor.mjs run C:\Projects\MyProject
+node src/conductor.mjs status C:\Projects\MyProject
+node src/conductor.mjs stop C:\Projects\MyProject
+node src/conductor.mjs set-provider C:\Projects\MyProject YOUR_MODEL_ID
+node src/conductor.mjs reopen C:\Projects\MyProject BUILDER C:\Projects\feedback.txt
 ```
 
-Use the menu for automatic proxy startup and private key loading. The direct
-CLI expects those prerequisites already available. Resume a stopped project
-with `run`; completed projects are not reopened automatically. To retry after
-the two-failure limit, inspect the failure and adjust `failures` in state only
-while stopped. Existing Director projects are preserved separately and are not
-silently converted into Conductor projects.
+The CLI also starts the bundled proxy automatically. Set the API-key environment
+variable before `models` or `run` if required. `run PROJECT --headless` omits the
+native display window. After reopening, use `run` to start the selected phase.
 
-Run `npm test` for controller and role-boundary regression tests. Integration
-testing must also verify the real model and the native terminal; deterministic
-tests alone do not establish model quality or end-to-end product success.
+## Development verification
 
-Interrupting a worker turn in the native Codex window pauses that role and keeps the session open for your next message. The role deadline pauses while waiting. Submit guidance in that window to continue. Conductor Stop or Ctrl+C in its controller window still ends the run.
+`npm test` runs controller, handoff, retry, launcher, proxy-stream, and provider
+translation tests. To exercise an installed Codex binary against a deterministic
+local Responses test server:
 
-Reviewer deadlines stop for attention instead of launching the same review repeatedly. The original request controls scope; optional suggestions do not block acceptance.
+```powershell
+$env:CONDUCTOR_NATIVE_TEST = '1'
+node --test test/native-provider.test.mjs
+```
 
-Continue on a stopped or failed run resets per-attempt failure counters after checking file integrity; the total run budget remains. An incomplete reviewer response gets one request for clarification in the same session. Raw review responses are saved under runs for diagnosis.
-
-To reopen a completed project with feedback, choose menu 7, select the project, choose Planner, Builder, or Reviewer, and enter optional guidance. It starts a fresh session at that phase. CLI: node src/conductor.mjs reopen PROJECT ROLE FEEDBACK_FILE, then node src/conductor.mjs run PROJECT. Existing product files are preserved; prior review/checklist/state are archived. Reopening grants at least ten remaining role sessions when the prior run budget is exhausted.
+The smoke test uses a copied launcher and an isolated temporary Codex home.
+It checks a real file edit and tool-result round trip without NOVA Desktop,
+SSH, credentials, or model inference. This is not a model-quality benchmark
+or a claim of live Ollama/LM Studio validation. Temporary smoke files remain in
+TEMP for diagnosis. Test a small project with your actual provider/model first.

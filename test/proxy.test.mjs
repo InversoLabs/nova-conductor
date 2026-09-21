@@ -100,17 +100,9 @@ test('existing proxy HTTP handler preserves keepalives and repairs streamed tool
   upstream.listen(0, '127.0.0.1'); await once(upstream, 'listening');
   const proxyFile = new URL('../infrastructure/nova-codex-proxy.js', import.meta.url);
   const localRequire = createRequire(proxyFile);
-  const wrappedHttp = {
-    createServer(handler) {
-      proxyServer = http.createServer(handler);
-      const listen = proxyServer.listen.bind(proxyServer);
-      proxyServer.listen = (_port, _host, callback) => listen(0, '127.0.0.1', callback);
-      return proxyServer;
-    },
-    request(options, callback) { return http.request({ ...options, host: '127.0.0.1', port: upstream.address().port }, callback); },
-  };
   try {
-    vm.runInNewContext(fs.readFileSync(proxyFile, 'utf8'), { require: name => name === 'http' ? wrappedHttp : localRequire(name), process: { argv: [] }, console: { log() {} }, Buffer, Set });
+    proxyServer=localRequire('./nova-codex-proxy.js').createProxy({baseUrl:`http://127.0.0.1:${upstream.address().port}/v1`});
+    proxyServer.listen(0,'127.0.0.1');
     await once(proxyServer, 'listening');
     const result = await fetch(`http://127.0.0.1:${proxyServer.address().port}/v1/responses`, {
       method: 'POST', headers: { 'content-type': 'application/json' },

@@ -39,25 +39,40 @@ function Read-Project {
 }
 function Start-Project {
     param([string]$Root)
-    $prior=$env:NOVA_DESKTOP_API_KEY
+    $state=Get-Content -LiteralPath (Join-Path $Root 'state.json') -Raw | ConvertFrom-Json
+    $keyName=$state.config.provider.keyEnv
+    if(-not $state.config.provider){$keyName='NOVA_DESKTOP_API_KEY'}
+    $prior=$null
+    if($keyName){$prior=[Environment]::GetEnvironmentVariable($keyName,'Process')}
     try {
-        if(-not $prior){$env:NOVA_DESKTOP_API_KEY=[IO.File]::ReadAllText((Join-Path ([Environment]::GetFolderPath('Desktop')) 'codex/nova_key.txt')).Trim()}
-        $client=New-Object Net.Sockets.TcpClient
-        try {$client.Connect('127.0.0.1',8788);$ready=$true}catch{$ready=$false}finally{$client.Dispose()}
-        if(-not $ready){
-            Start-Process node -WindowStyle Hidden -ArgumentList ('"'+(Join-Path $PSScriptRoot 'infrastructure/nova-codex-proxy.js')+'"') -RedirectStandardOutput (Join-Path $Root 'proxy.log') -RedirectStandardError (Join-Path $Root 'proxy-errors.log') | Out-Null
-            Start-Sleep -Milliseconds 750
+        if($keyName -and -not $prior){
+            $secure=Read-Host "API key for $keyName (used only for this run)" -AsSecureString
+            $ptr=[Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+            try {[Environment]::SetEnvironmentVariable($keyName,[Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr),'Process')}
+            finally {[Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr)}
         }
         & node $cli run $Root
-    } finally {$env:NOVA_DESKTOP_API_KEY=$prior;$prior=$null}
+    } finally {if($keyName){[Environment]::SetEnvironmentVariable($keyName,$prior,'Process')};$prior=$null}
 }
-foreach($name in @('node','git','codex','ssh')){if(-not(Get-Command $name -ErrorAction SilentlyContinue)){throw "$name is required on PATH"}}
+function Set-Provider {
+    Write-Host '1 Ollama | 2 LM Studio | 3 Other Responses-compatible provider | 4 NOVA bridge'
+    $kind=switch(Read-Host 'Provider'){'1'{'ollama'} '2'{'lmstudio'} '3'{'custom'} '4'{'nova'} default{throw 'Choose 1, 2, 3, or 4.'}}
+    $default=switch($kind){'ollama'{'http://127.0.0.1:11434/v1'} 'lmstudio'{'http://127.0.0.1:1234/v1'} 'nova'{'http://127.0.0.1:8787/v1'} default{''}}
+    $url=(Read-Host "API base URL including /v1 (Enter: $default)").Trim()
+    if(-not $url){$url=$default}
+    $keyName=(Read-Host 'API key environment variable NAME (Enter for no authentication; do not paste a key)').Trim()
+    & node $cli provider $kind $url $keyName
+    if($LASTEXITCODE -ne 0){throw 'Invalid provider configuration.'}
+}
+foreach($name in @('node','git','codex')){if(-not(Get-Command $name -ErrorAction SilentlyContinue)){throw "$name is required on PATH. See README.md for setup."}}
 if($CheckOnly){Write-Host 'Nova Conductor launcher ready.';exit 0}
 while($true){
     Write-Host "`nNOVA CONDUCTOR" -ForegroundColor Cyan
     Write-Host 'Prompt > Planner > Builder > Reviewer > checklist > Builder'
     Write-Host 'Each role opens a fresh 16K session in the native Codex window.'
-    Write-Host "1 New project  |  2 Continue  |  3 Status  |  4 Stop  |  5 Projects  |  6 Model ($model)  |  7 Reopen  |  Q Quit"
+    $provider=(& node $cli provider | ConvertFrom-Json)
+    Write-Host "New-project provider: $($provider.kind) at $($provider.baseUrl)"
+    Write-Host "1 New project  |  2 Continue  |  3 Status  |  4 Stop  |  5 Projects  |  6 Model ($model)  |  7 Reopen  |  8 Provider settings  |  9 Change project provider  |  Q Quit"
     try {
         switch((Read-Host 'Choose').ToUpperInvariant()){
             '1' {
@@ -88,6 +103,11 @@ while($true){
             '4' {$selected=Read-Project;if($selected){& node $cli stop $selected}}
             '5' {New-Item -ItemType Directory -Path $projects -Force | Out-Null; Start-Process explorer.exe -ArgumentList ('"'+$projects+'"')}
             '6' {$model=Select-Model -Current $model}
+            '8' {Set-Provider}
+            '9' {
+                $selected=Read-Project
+                if($selected){Set-Provider;$model=Select-Model -Current $model;& node $cli set-provider $selected $model;if($LASTEXITCODE -ne 0){throw 'Could not update project provider.'}}
+            }
             '7' {
                 $selected=Read-Project
                 if($selected){

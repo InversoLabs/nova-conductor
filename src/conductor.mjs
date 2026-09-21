@@ -3,6 +3,7 @@ import path from 'node:path';
 import { atomic, snapshot, assertRoleChanges, nextPhase, rolePrompt, roleInstructions, readText, saveReview, reviewDecision, normalizeReview } from './workflow.mjs';
 import { startServer, killTree, sleep, openViewer, runChecks } from './runtime.mjs';
 import { fileURLToPath } from 'node:url';
+import {loadProvider,saveProvider,listModels} from './providers.mjs';
 
 const original=JSON.parse(fs.readFileSync(new URL('../infrastructure/nova-codex-models.json',import.meta.url))).models[0].base_instructions;
 export function initialize(root,prompt,model='gpt-oss:20b',verification=[]) {
@@ -13,7 +14,7 @@ export function initialize(root,prompt,model='gpt-oss:20b',verification=[]) {
   fs.mkdirSync(path.join(root,'work'),{recursive:true}); fs.mkdirSync(path.join(root,'runs'));
   fs.writeFileSync(path.join(root,'work','REQUEST.md'),prompt);
   const state={version:1,prompt,role:'PLANNER',status:'READY',runs:[],feedback:'',failures:0,
-    config:{model,contextTokens:16384,port:8799,maxRuns:60,maxFailures:2,roleTimeoutMs:10*60*1000,verification},expected:snapshot(path.join(root,'work'))};
+    config:{model,provider:loadProvider(),contextTokens:16384,port:8799,maxRuns:60,maxFailures:2,roleTimeoutMs:10*60*1000,verification},expected:snapshot(path.join(root,'work'))};
   atomic(path.join(root,'state.json'),state); return state;
 }
 function log(root,type,data={}) { fs.appendFileSync(path.join(root,'events.jsonl'),JSON.stringify({at:new Date().toISOString(),type,...data})+'\n'); }
@@ -91,7 +92,7 @@ export async function run(root,{visible=true,start=startServer,check=runChecks}=
     }
     const stopFile=path.join(root,'stop.request'); if(fs.existsSync(stopFile))fs.unlinkSync(stopFile);
     watcher=setInterval(()=>{if(fs.existsSync(stopFile))stop();},300);
-    console.log('Starting your NOVA launcher and compatibility proxy path...');
+    console.log('Starting native Codex and the bundled provider proxy...');
     server=await start(root,state.config);
     atomic(path.join(root,'viewer.json'),{url:server.url,threadId:null,role:state.role});
     if(visible) openViewer(root);
@@ -213,7 +214,7 @@ export async function run(root,{visible=true,start=startServer,check=runChecks}=
             let alive=false;try{process.kill(server.child.pid,0);alive=true;}catch(e){if(e.code!=='ESRCH')throw e;}
             if(alive)throw Error('Cannot confirm old Codex worker stopped; refusing a duplicate retry');
           }
-          server?.connection.close();server=null;active=null;
+          server?.connection.close();server?.closeProxy?.();server=null;active=null;
         }
         const after=snapshot(work);
         try {assertRoleChanges(role,before,after);state.expected=after;}catch(unsafe){state.status='NEEDS_ATTENTION';state.feedback=unsafe.message;break;}
@@ -261,18 +262,29 @@ export async function run(root,{visible=true,start=startServer,check=runChecks}=
     clearInterval(watcher);process.off('SIGINT',stop);process.off('SIGTERM',stop);
     atomic(path.join(root,'viewer.json'),{done:true,status:state.status});
     if(active)await server?.connection.request('turn/interrupt',active).catch(()=>{});
-    server?.connection.close();killTree(server?.child);
+    server?.connection.close();killTree(server?.child);server?.closeProxy?.();
     fs.unlinkSync(lock);
   }
 }
 if(process.argv[1] && path.resolve(process.argv[1])===fileURLToPath(import.meta.url)) {
   const [command,root,...args]=process.argv.slice(2);
   try {
-    if(command==='init') {initialize(root,fs.readFileSync(args[0],'utf8'),args[1]);console.log(path.resolve(root));}
+    if(command==='provider') {if(root)saveProvider({kind:root,baseUrl:args[0],keyEnv:args[1]});console.log(JSON.stringify(loadProvider(),null,2));}
+    else if(command==='models') {console.log(JSON.stringify(await listModels(loadProvider())));}
+    else if(command==='set-provider') {
+      const lock=path.join(root,'conductor.lock');let held=false;
+      try{fs.writeFileSync(lock,String(process.pid),{flag:'wx'});held=true;
+        const file=path.join(root,'state.json'),s=JSON.parse(fs.readFileSync(file));
+        if(!['COMPLETE','STOPPED','NEEDS_ATTENTION','READY'].includes(s.status))throw Error('Stop the project first');
+        if(args[0] && !/^[a-zA-Z0-9][\w.:/-]{0,199}$/.test(args[0]))throw Error('Invalid model name');
+        s.config.provider=loadProvider();if(args[0])s.config.model=args[0];atomic(file,s);console.log('Project provider updated; model: '+s.config.model);
+      }finally{if(held)fs.unlinkSync(lock);}
+    }
+    else if(command==='init') {initialize(root,fs.readFileSync(args[0],'utf8'),args[1]);console.log(path.resolve(root));}
     else if(command==='reopen') {const s=reopen(root,fs.readFileSync(args[1],'utf8'),args[0]);console.log('Reopened at '+s.role+'. Use run or Continue to start.');}
     else if(command==='run') {const s=await run(root,{visible:!args.includes('--headless')});console.log(`${s.status}: ${s.feedback||path.join(root,'work')}`);if(s.status!=='COMPLETE')process.exitCode=2;}
     else if(command==='stop') {if(!fs.existsSync(path.join(root,'state.json')))throw Error('Unknown project');fs.writeFileSync(path.join(root,'stop.request'),'stop');}
     else if(command==='status') {const s=JSON.parse(fs.readFileSync(path.join(root,'state.json')));console.log(JSON.stringify({status:s.status,role:s.role,runs:s.runs.length,feedback:s.feedback},null,2));}
-    else throw Error('Usage: conductor init PROJECT PROMPT_FILE [MODEL] | reopen PROJECT ROLE FEEDBACK_FILE | run PROJECT | stop PROJECT | status PROJECT');
+    else throw Error('Usage: conductor provider [ollama|lmstudio|custom|nova BASE_URL [KEY_ENV]] | models | set-provider PROJECT [MODEL] | init PROJECT PROMPT_FILE [MODEL] | reopen PROJECT ROLE FEEDBACK_FILE | run PROJECT [--headless] | stop PROJECT | status PROJECT');
   }catch(error){console.error(error.message);process.exitCode=1;}
 }

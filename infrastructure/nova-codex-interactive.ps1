@@ -2,8 +2,8 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$Model,
     [string]$Workspace = (Get-Location).Path,
-    [ValidateSet('https://nova.inversolabs.us', 'http://192.168.86.51:8787', 'http://127.0.0.1:8788')]
     [string]$BaseUrl = 'https://nova.inversolabs.us',
+    [switch]$DirectProvider,
     [ValidateSet('read-only', 'workspace-write')]
     [string]$Sandbox = 'workspace-write',
     [ValidateSet('minimal', 'low', 'medium', 'high')]
@@ -44,6 +44,13 @@ if ($env:TERM -eq 'dumb') { $env:TERM = 'xterm-256color' }
 # installation, whose plugins and skills would consume most of an 8K context.
 $env:CODEX_HOME = Join-Path $env:LOCALAPPDATA 'NOVA-Codex'
 New-Item -ItemType Directory -Path $env:CODEX_HOME -Force | Out-Null
+$homeConfig = Join-Path $env:CODEX_HOME 'config.toml'
+if (-not (Test-Path -LiteralPath $homeConfig)) {
+    # Fresh installations need an enabled Windows sandbox for workspace writes.
+    # The restricted-token mode requires no administrator setup. Preserve any
+    # existing configuration (including an elevated sandbox) on upgrades.
+    [IO.File]::WriteAllText($homeConfig, "[windows]`nsandbox = `"unelevated`"`n", [Text.UTF8Encoding]::new($false))
+}
 
 # Ollama is tuned for one active request. Hold a machine-local mutex for the
 # lifetime of Codex so a second launcher cannot compete for the same model.
@@ -84,8 +91,8 @@ if ([string]::IsNullOrWhiteSpace($ModelCatalog)) {
         $catalogObject = Get-Content -LiteralPath $catalogTemplate -Raw | ConvertFrom-Json
         if ($null -ne $catalogObject.models -and $catalogObject.models.Count -gt 0) {
             $catalogObject.models[0].slug = $Model
-            $catalogObject.models[0].display_name = "$Model via NOVA"
-            $catalogObject.models[0].description = "Local $Model coding inference through the authenticated NOVA Responses bridge."
+            $catalogObject.models[0].display_name = "$Model via Conductor"
+            $catalogObject.models[0].description = "$Model coding inference through the Conductor compatibility proxy."
             $catalogObject.models[0].context_window = $ContextTokens
             $catalogObject.models[0].max_context_window = $ContextTokens
             $manualCodingInstructions = $catalogObject.models[0].base_instructions
@@ -129,7 +136,7 @@ if ([string]::IsNullOrWhiteSpace($ModelCatalog)) {
 # On the LAN, finish the slow cold load before Codex opens its shorter-lived
 # inference stream. This prevents NOVA's request timeout from aborting Ollama
 # during model warm-up. A resident model returns immediately.
-if ($BaseUrl -in @('http://192.168.86.51:8787', 'http://127.0.0.1:8788')) {
+if (-not $DirectProvider -and $BaseUrl -in @('http://192.168.86.51:8787', 'http://127.0.0.1:8788')) {
     if (-not (Get-Command ssh -ErrorAction SilentlyContinue)) {
         throw 'Windows OpenSSH is required to warm the NOVA model.'
     }
@@ -178,6 +185,8 @@ $codexArgs = @(
     '-c', 'tool_output_token_limit=2000',
     '-c', 'model_provider="nova_remote"',
     '-c', 'model_providers.nova_remote.name="NOVA Remote"',
+    '-c', 'model_providers.nova_remote.wire_api="responses"',
+    '-c', 'model_providers.nova_remote.requires_openai_auth=false',
     '-c', ('model_providers.nova_remote.base_url="' + $BaseUrl + '/v1"'),
     '-c', 'model_providers.nova_remote.env_key="NOVA_DESKTOP_API_KEY"',
     '-c', 'model_providers.nova_remote.request_max_retries=8',
