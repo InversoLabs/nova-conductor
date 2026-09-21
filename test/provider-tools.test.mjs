@@ -5,13 +5,18 @@ const require=createRequire(import.meta.url);
 const {adaptRequest,adaptResponse,createToolStream}=require('../infrastructure/provider-tools.cjs');
 const input='*** Begin Patch\n*** Add File: hello.txt\n+hello\n*** End Patch';
 test('local provider patch schema and tool-result history round trip',()=>{
- const body=adaptRequest({reasoning:{effort:'minimal'},tools:[{type:'custom',name:'apply_patch',description:'patch'},{type:'function',name:'exec_command'}],input:[{type:'custom_tool_call',name:'apply_patch',call_id:'c1',input},{type:'custom_tool_call_output',call_id:'c1',output:'ok'}]});
+ const body=adaptRequest({model:'gpt-oss:20b',reasoning:{effort:'minimal'},tools:[{type:'custom',name:'apply_patch',description:'patch'},{type:'function',name:'exec_command'}],input:[{type:'custom_tool_call',name:'apply_patch',call_id:'c1',input},{type:'custom_tool_call_output',call_id:'c1',output:'ok'}]});
  assert.equal(body.reasoning.effort,'low');
  assert.equal(body.tools[0].type,'function');assert.equal(body.tools[1].name,'exec_command');
  assert.equal(body.input[1].type,'function_call_output');
  assert.equal(JSON.parse(body.input[0].arguments).input,input);
  assert.equal(adaptResponse({output:[body.input[0]]}).output[0].input,input);
  assert.throws(()=>adaptResponse({output:[{type:'function_call',name:'apply_patch',arguments:'{"bad":true}'}]}),/input string/);
+});
+
+test('reasoning mapping preserves GPT-OSS effort tiers and isolates Ornith behavior',()=>{
+ for(const [model,effort,expected] of [['gpt-oss:20b','none','low'],['gpt-oss:20b','medium','medium'],['gpt-oss:120b','high','high'],['ornith-1.5:9b-text','minimal','none'],['ornith-1.5:9b-text','high','high'],['other','minimal','minimal']])assert.equal(adaptRequest({model,reasoning:{effort}}).reasoning.effort,expected);
+ assert.equal(adaptRequest({model:'gpt-oss:20b'}).reasoning,undefined);
 });
 test('fragmented local provider patch stream converts deltas, done and final output consistently',()=>{
  const args=JSON.stringify({input}),item={type:'function_call',name:'apply_patch',id:'p1',call_id:'c1',arguments:args};

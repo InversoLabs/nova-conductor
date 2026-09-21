@@ -3,8 +3,12 @@
 // Local Responses servers commonly accept function tools, but Codex's patch
 // tool is freeform. Translate only this known contract in both directions.
 function adaptRequest(body) {
-  // The local APIs use low/medium/high; Codex's smallest effort is minimal.
-  if(body.reasoning?.effort==='minimal')body.reasoning={...body.reasoning,effort:'low'};
+  const model=String(body.model||'').toLowerCase().split('/').at(-1);
+  const effort=body.reasoning?.effort;
+  // GPT-OSS cannot disable thinking; Ornith has an on/off template, not tiers.
+  // Unknown models retain their requested controls rather than guessing.
+  if((model==='gpt-oss'||model.startsWith('gpt-oss:')) && ['minimal','none'].includes(effort))body.reasoning={...body.reasoning,effort:'low'};
+  else if(model==='ornith-1.5:9b-text' && effort==='minimal')body.reasoning={...body.reasoning,effort:'none'};
   body.tools = (body.tools || []).map(tool => tool.type === 'custom' && tool.name === 'apply_patch' ? {
     type: 'function', name: 'apply_patch', description: tool.description,
     parameters: {type:'object',properties:{input:{type:'string',description:'The complete Codex patch text.'}},required:['input'],additionalProperties:false},

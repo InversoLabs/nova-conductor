@@ -56,6 +56,12 @@ needs the variable already set; manual model entry works when discovery fails.
 Keys are not written to provider settings or project state. Use HTTPS when
 sending credentials beyond a trusted local network.
 
+With Ollama, Conductor maps `minimal` effort to `low` for `gpt-oss:*`, retaining
+GPT-OSS reasoning and preserving medium/high selections. For the exact model
+`ornith-1.5:9b-text`, minimal maps to `none` (thinking off); its template has no
+minimal tier. Unknown model settings pass through. An existing NOVA bridge must
+also be updated to forward reasoning settings; older builds dropped the field.
+
 Defaults are stored in `%LOCALAPPDATA%\NovaConductor\provider.json`.
 Each new project saves its own provider and model settings. Changing the default
 does not redirect existing projects. Choose **9 — Change project provider** to
