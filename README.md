@@ -119,6 +119,18 @@ deadlines on their next run. Already-running controllers must be stopped and
 restarted to load the update. Custom deadlines remain unchanged. These are
 role deadlines, separate from provider/network disconnect handling.
 
+Builders also have a progress watchdog: four minutes without tool activity or
+eight minutes without product-file changes triggers a fresh builder with a
+focused instruction to implement the smallest unfinished step. Active tools and
+user pauses suspend these checks; handoff-note edits do not count as product
+progress. One automatic recovery is allowed, then the run stops for attention.
+Disconnects with no product changes share that recovery budget. Actual product
+progress in a completed builder resets it; Continue/Reopen starts a new attempt.
+Project config can override `builderIdleMs` and `builderNoChangeMs`. Tool activity
+metadata and stall reasons are recorded in `events.jsonl`, without command text.
+An unusable reviewer response gets one clarification in the same session; if
+still unusable, Conductor stops instead of starting repeated empty reviews.
+
 ## CLI
 
 Run these commands from the extracted repository:

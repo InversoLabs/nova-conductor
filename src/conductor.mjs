@@ -4,6 +4,7 @@ import { atomic, snapshot, assertRoleChanges, nextPhase, rolePrompt, roleInstruc
 import { startServer, killTree, sleep, openViewer, runChecks } from './runtime.mjs';
 import { fileURLToPath } from 'node:url';
 import {loadProvider,saveProvider,listModels} from './providers.mjs';
+import {BuilderProgress,productSignature,interruptBeforeRecovery} from './progress.mjs';
 
 const original=JSON.parse(fs.readFileSync(new URL('../infrastructure/nova-codex-models.json',import.meta.url))).models[0].base_instructions;
 export function initialize(root,prompt,model='gpt-oss:20b',verification=[]) {
@@ -36,6 +37,7 @@ export function reopen(root,feedback,role='BUILDER') {
     for(const file of ['state.json','work/REVIEW.md','work/BUILD_CHECKLIST.md'])if(fs.existsSync(path.join(root,file)))fs.copyFileSync(path.join(root,file),path.join(archive,path.basename(file)));
     fs.writeFileSync(path.join(work,'BUILD_CHECKLIST.md'),'# User feedback\n\n'+feedback.trim()+'\n\n# Build Checklist\n\n- [ ] Address the user feedback above using the existing project, verify the changes, and hand off for review.\n');
     state.role=role;state.status='STOPPED';state.failures=0;state.disconnectFailures=0;state.busyRetries=0;state.deadlineRecoveries=0;state.stalledBuilds=0;state.nextRetryAt=null;state.lastBuildSignature=null;
+    state.progressRecoveries=0;
     state.config.maxRuns=Math.max(state.config.maxRuns,state.runs.length+10);
     state.feedback='User reopened this project at '+role+'. The previous review is superseded by this guidance; preserve existing work and follow your selected role:\n'+feedback.trim();
     state.expected=snapshot(work);atomic(stateFile,state);
@@ -69,6 +71,7 @@ export async function run(root,{visible=true,start=startServer,check=runChecks}=
   state.deadlineRecoveries ??= 0;
   state.stalledBuilds ??= 0;
   state.busyRetries ??= 0;
+  state.progressRecoveries ??= 0;
   const abort=new AbortController();
   const save=()=>atomic(stateFile,state);
   const stop=()=>{stopped=true; abort.abort(); if(active) server?.connection.request('turn/interrupt',active).catch(()=>{});};
@@ -91,6 +94,7 @@ export async function run(root,{visible=true,start=startServer,check=runChecks}=
       save();log(root,'deadline.resume',{next:state.role});
     }
     if(['NEEDS_ATTENTION','STOPPED'].includes(state.status)) {
+      state.progressRecoveries=0;
       log(root,'run.continued',{previousStatus:state.status,failures:state.failures});
       state.failures=0;state.disconnectFailures=0;state.busyRetries=0;state.nextRetryAt=null;
       state.status='READY';save();
@@ -130,6 +134,16 @@ export async function run(root,{visible=true,start=startServer,check=runChecks}=
         let reviewOutput='';
         let reviewClarifications=0;
         const completion=new Promise((resolve,reject)=>{
+          const progress=role==='BUILDER'?new BuilderProgress(before,state.config):null;
+          const progressTimer=progress?setInterval(()=>{
+            try{
+              const reason=progress.check(snapshot(work));
+              if(reason && active && !stopped){
+                log(root,'builder.stalled',{id,reason});
+                cleanup();reject(Error('Builder stalled: '+reason+'; partial files preserved'));
+              }
+            }catch(error){cleanup();reject(error);}
+          },state.config.progressPollMs??15000):null;
           const deadline=()=>{ if(active)server.connection.request('turn/interrupt',active).catch(()=>{}); cleanup();reject(Error('Role deadline exceeded; partial files preserved'));};
           const timeoutMs=role==='BUILDER' ? (state.config.builderTimeoutMs ?? state.config.roleTimeoutMs) : state.config.roleTimeoutMs;
           let timer=setTimeout(deadline,timeoutMs);
@@ -138,6 +152,8 @@ export async function run(root,{visible=true,start=startServer,check=runChecks}=
           const notice=event=>{
             const p=event.params;
             if(p?.threadId!==record.threadId)return;
+            progress?.notice(event);
+            if(['item/started','item/completed'].includes(event.method) && ['commandExecution','fileChange'].includes(p.item?.type))log(root,'tool.activity',{run:id,event:event.method,type:p.item.type,status:p.item.status});
             if(role==='REVIEWER' && event.method==='item/completed' && p.item?.type==='agentMessage' && p.item.phase!=='commentary') reviewOutput=p.item.text || reviewOutput;
             if(event.method==='turn/started') {
               active={threadId:record.threadId,turnId:p.turn.id};record.turnEnded=false;
@@ -165,11 +181,12 @@ export async function run(root,{visible=true,start=startServer,check=runChecks}=
                   server.connection.request('turn/start',{threadId:record.threadId,input:[{type:'text',text:'Your review is missing evidence or a repair checklist. Return the complete review based on what you already inspected: # PASS or # REVISE, then concrete observed evidence. If anything is unverified, use REVISE and add ## Checklist with - [ ] repair or verification steps. Do not repeat the investigation or edit files.',text_elements:[]}],effort:'minimal'}).then(r=>{active={threadId:record.threadId,turnId:r.turn.id};}).catch(e=>{cleanup();reject(e);});
                   return;
                 }
+                if(!usable && !readText(work,'REVIEW.md')){cleanup();reject(Error('Reviewer returned no usable final review after clarification; inspect provider output limits or model tool/reply behavior.'));return;}
               }
               cleanup();resolve(p.turn);
             }
           };
-          const cleanup=()=>{clearTimeout(timer);abort.signal.removeEventListener('abort',cancelled);server.connection.off('notice',notice);server.connection.off('disconnected',disconnect);};
+          const cleanup=()=>{clearTimeout(timer);clearInterval(progressTimer);abort.signal.removeEventListener('abort',cancelled);server.connection.off('notice',notice);server.connection.off('disconnected',disconnect);};
           cancelCompletion=()=>{cleanup();reject(Error('Turn startup failed'));};
           server.connection.on('notice',notice);server.connection.on('disconnected',disconnect);
           abort.signal.addEventListener('abort',cancelled,{once:true});
@@ -198,6 +215,7 @@ export async function run(root,{visible=true,start=startServer,check=runChecks}=
         }
         const next=nextPhase(role,work,checks);
         if(role==='BUILDER') {
+          if(productSignature(before)!==productSignature(after))state.progressRecoveries=0;
           const product=Object.fromEntries(Object.entries(after).filter(([name])=>!['BUILD_NOTES.md','BUILD_CHECKLIST.md','REVIEW.md'].includes(name)));
           const signature=JSON.stringify(product);
           state.stalledBuilds=signature===state.lastBuildSignature?state.stalledBuilds+1:0;
@@ -211,10 +229,12 @@ export async function run(root,{visible=true,start=startServer,check=runChecks}=
       } catch(error) {
         record.status=stopped?'STOPPED':'FAILED';record.error=error.message;
         const disconnected=isDisconnect(error);
+        const stalled=/^Builder stalled:/.test(error.message);
         const deadline=/Role deadline exceeded/.test(error.message);
         // If no terminal turn event arrived, the server might still be editing.
         // Stop our owned tree before capturing files or starting another role.
-        if((disconnected || deadline || stopped) && !record.turnEnded){
+        if((disconnected || deadline || stopped || stalled) && !record.turnEnded){
+          if(stalled)await interruptBeforeRecovery(server.connection,active);
           killTree(server?.child);
           if(server?.child?.pid){
             let alive=false;try{process.kill(server.child.pid,0);alive=true;}catch(e){if(e.code!=='ESRCH')throw e;}
@@ -226,7 +246,13 @@ export async function run(root,{visible=true,start=startServer,check=runChecks}=
         try {assertRoleChanges(role,before,after);state.expected=after;}catch(unsafe){state.status='NEEDS_ATTENTION';state.feedback=unsafe.message;break;}
         state.feedback=error.message;
         console.log(error.message);
-        if(!stopped && deadline && role!=='REVIEWER' && state.deadlineRecoveries<3){
+        if(!stopped && stalled){
+          state.progressRecoveries++;
+          if(state.progressRecoveries>1){state.status='NEEDS_ATTENTION';state.feedback='Builder stalled again after a focused recovery. Files preserved. Inspect the model/provider or provide guidance before continuing.';break;}
+          state.feedback='The previous builder stalled without useful progress. Read the existing files once, then use apply_patch to implement the smallest unfinished build-plan or checklist step immediately. Do not redesign or restate the plan. Preserve working files. Verify this small change and hand off with remaining work.';
+          state.status='READY';record.next='BUILDER';
+          log(root,'builder.progress-retry',{id,attempt:state.progressRecoveries});
+        }else if(!stopped && deadline && role!=='REVIEWER' && state.deadlineRecoveries<3){
           state.deadlineRecoveries++;
           const checks=role==='PLANNER'?null:await check(root,state.config.verification,abort.signal);
           if(JSON.stringify(snapshot(work))!==JSON.stringify(after))throw Error('Verification modified project files');
@@ -245,16 +271,21 @@ export async function run(root,{visible=true,start=startServer,check=runChecks}=
           console.log('NOVA busy: retry '+state.busyRetries+'/3 in '+delayMs/1000+' seconds.');
           log(root,'model.busy',{role,attempt:state.busyRetries,delayMs});
         }else if(!stopped && disconnected){
+          if(role==='BUILDER'){
+            state.progressRecoveries=productSignature(before)===productSignature(after)?state.progressRecoveries+1:0;
+            if(state.progressRecoveries>1){state.status='NEEDS_ATTENTION';state.feedback='Builder repeatedly disconnected without product changes. Files preserved; inspect the provider/model before continuing.';break;}
+          }
           state.disconnectFailures++;
           if(state.disconnectFailures>state.config.disconnectRetries){state.status='NEEDS_ATTENTION';break;}
           const delayMs=Math.min(60000,state.config.retryDelayMs*2**(state.disconnectFailures-1));
           state.nextRetryAt=new Date(Date.now()+delayMs).toISOString();
           state.feedback=`The previous ${role} session lost its connection. Partial files are preserved. Inspect existing work and continue without repeating completed edits. ${error.message}`;
+          if(role==='BUILDER' && state.progressRecoveries)state.feedback+=' Implement the smallest unfinished plan/checklist step with apply_patch now, verify that small change, then hand off. Do not restate or redesign the plan.';
           console.log(`Connection recovery ${state.disconnectFailures}/${state.config.disconnectRetries}: fresh ${role} in ${delayMs/1000}s; files preserved.`);
           log(root,'connection.retry',{role,run:id,attempt:state.disconnectFailures,delayMs});
         }else {
           if(!stopped)state.failures++;
-          if(/deadline|timed out|startup failed|no product progress/i.test(error.message)){state.status='NEEDS_ATTENTION';break;}
+          if(/deadline|timed out|startup failed|no product progress|no usable final review/i.test(error.message)){state.status='NEEDS_ATTENTION';break;}
         }
       } finally {record.endedAt=new Date().toISOString();save();log(root,'role.finished',record);}
       if(visible)await sleep(2000);
