@@ -76,10 +76,14 @@ test('Conductor creates a new Codex thread on every role change and loops via Ma
     if(method==='turn/start'){
       assert.notEqual(JSON.parse(fs.readFileSync(path.join(root,'viewer.json'))).threadId,params.threadId,'Viewer must not attach before first turn starts');
       const text=params.input[0].text;
+      assert.ok(text.startsWith('Original user request (also saved in REQUEST.md):\nBuild a tested product.\n\n'), 'Every fresh role must receive the original request without a file-read prerequisite');
       if(text.includes('You are the PLANNER')){
         fs.writeFileSync(path.join(work,'AGENTS.md'),'Use local tests and follow the original request. '.repeat(4));
         fs.writeFileSync(path.join(work,'BUILD_PLAN.md'),'Implement all requested behaviors and execute acceptance checks. '.repeat(4));
-      }else if(text.includes('You are the BUILDER'))fs.writeFileSync(path.join(work,'product.txt'),reviews?'fixed':'first');
+      }else if(text.includes('You are the BUILDER')){
+        assert.match(text,reviews?/Build mode: reviewer repairs/:/Build mode: initial implementation/);
+        fs.writeFileSync(path.join(work,'product.txt'),reviews?'fixed':'first');
+      }
       else {
         reviews++;
         fs.writeFileSync(path.join(work,'REVIEW.md'),reviews===1?'# REVISE\nThe product needs a concrete correction to satisfy the requested behavior before it can be accepted.':'# PASS\nEvery requested behavior was executed and verified against the original prompt and the complete build plan.');

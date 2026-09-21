@@ -1,0 +1,32 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import {initialize} from '../src/conductor.mjs';
+import {importProject} from '../src/import-project.mjs';
+import {rolePrompt,snapshot} from '../src/workflow.mjs';
+
+test('external codebase imports into isolated builder workspace with preserved source and project rules',t=>{
+ const temp=fs.mkdtempSync(path.join(os.tmpdir(),'conductor-import-'));t.after(()=>fs.rmSync(temp,{recursive:true,force:true}));
+ const source=path.join(temp,'existing'),root=path.join(temp,'new');fs.mkdirSync(source);
+ fs.writeFileSync(path.join(source,'index.html'),'<h1>Existing website</h1>');
+ fs.writeFileSync(path.join(source,'AGENTS.md'),'Use existing project conventions.');
+ fs.writeFileSync(path.join(source,'REQUEST.md'),'Old unrelated request');
+ fs.writeFileSync(path.join(source,'BUILD_PLAN.md'),'Old unrelated plan');
+ fs.mkdirSync(path.join(source,'node_modules'));fs.writeFileSync(path.join(source,'node_modules','ignored'),'dependency');
+ const before=snapshot(source);
+ const state=importProject(root,source,'Fix mobile navigation.','gpt-oss:20b',initialize);
+ assert.equal(state.role,'BUILDER');assert.equal(state.builderMode,'user');assert.equal(state.status,'READY');
+ assert.deepEqual(snapshot(source),before);
+ assert.equal(fs.readFileSync(path.join(root,'work','index.html'),'utf8'),'<h1>Existing website</h1>');
+ assert.equal(fs.readFileSync(path.join(root,'work','AGENTS.md'),'utf8'),'Use existing project conventions.');
+ assert.equal(fs.readFileSync(path.join(root,'work','REQUEST.md'),'utf8'),'Fix mobile navigation.');
+ assert.equal(fs.readFileSync(path.join(root,'imported-documents','REQUEST.md'),'utf8'),'Old unrelated request');
+ assert(!fs.existsSync(path.join(root,'work','node_modules')));
+ assert.deepEqual(snapshot(path.join(root,'work')),state.expected);
+ assert.match(rolePrompt(state),/user-directed changes/);
+ fs.writeFileSync(path.join(root,'work','index.html'),'changed copy');assert.deepEqual(snapshot(source),before);
+ assert.throws(()=>importProject(path.join(source,'nested'),source,'Fix it.','gpt-oss:20b',initialize),/outside/);
+ assert.throws(()=>importProject(root,source,'Fix it.','gpt-oss:20b',initialize),/must not exist/);
+});

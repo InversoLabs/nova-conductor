@@ -1,3 +1,4 @@
+const {promote,createGemmaPatchStream}=require('./gemma-patch.cjs');
 const http = require('http');
 const https = require('https');
 const {adaptRequest,adaptResponse,createToolStream}=require('./provider-tools.cjs');
@@ -119,7 +120,7 @@ function createProxy(options = {}) {
   const server = http.createServer((request, response) => {
   if(options.clientToken && request.headers.authorization!=='Bearer '+options.clientToken){response.writeHead(401);response.end('Unauthorized');return;}
   if(!['/v1/responses','/v1/models'].includes(request.url)){response.writeHead(404);response.end('Unsupported endpoint');return;}
-  let knownTools = [];
+  let knownTools = []; let compatibilityRequest = {};
   const forward = (requestBody) => {
     const headers = { ...request.headers, host: target.host, 'accept-encoding':'identity' };
     if(options.clientToken){delete headers.authorization;if(options.apiKey)headers.authorization='Bearer '+options.apiKey;}
@@ -135,17 +136,18 @@ function createProxy(options = {}) {
     remote.on('aborted',()=>response.destroy());
     if (contentType.includes('text/event-stream')) {
       const repair = createSseRepair({ repairPayload, report: reportRepair, knownTools });
+      const gemma = createGemmaPatchStream(compatibilityRequest, reportRepair);
       const adapter=translateTools ? createToolStream() : null;
       remote.setEncoding('utf8');
       remote.on('error',()=>response.destroy());
       remote.on('aborted',()=>response.destroy());
       remote.on('data', (chunk) => {
         try {
-          const output = repair.push(adapter ? adapter.push(chunk) : chunk);
+          const output = repair.push(gemma.push(adapter ? adapter.push(chunk) : chunk));
           if (output) response.write(output);
         } catch {remote.destroy();response.destroy();}
       });
-      remote.on('end', () => {try{response.end((adapter ? repair.push(adapter.end()) : '')+repair.end());}catch{response.destroy();}});
+      remote.on('end', () => {try{response.end((adapter ? repair.push(gemma.push(adapter.end())) : '')+repair.push(gemma.end())+repair.end());}catch{response.destroy();}});
       return;
     }
     const chunks = [];
@@ -153,7 +155,7 @@ function createProxy(options = {}) {
     remote.on('end', () => {
       const body = Buffer.concat(chunks);
       if (contentType.includes('application/json')) {
-        try {let value=JSON.parse(body.toString('utf8'));if(translateTools)value=adaptResponse(value);return response.end(JSON.stringify(repairPayload(value))); } catch {response.destroy();return;}
+        try {let value=JSON.parse(body.toString('utf8'));if(translateTools)value=adaptResponse(value);value=promote(value,compatibilityRequest,reportRepair)?.response||value;return response.end(JSON.stringify(repairPayload(value))); } catch {response.destroy();return;}
       }
       response.end(body);
     });
@@ -180,6 +182,7 @@ function createProxy(options = {}) {
       try {
         const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
         knownTools = (body.tools || []).map(tool => tool.name).filter(Boolean);
+        compatibilityRequest = {model:body.model,tool_choice:body.tool_choice,tools:(body.tools||[]).map(tool=>({...tool}))};
         const prepared=options.kind==='custom'?body:strengthenRequest(body);
         forward(JSON.stringify(translateTools ? adaptRequest(prepared) : prepared));
       } catch (error) {

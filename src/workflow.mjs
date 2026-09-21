@@ -60,18 +60,46 @@ export function nextPhase(role,work,checks) {
   if(decision==='REVISE' && !/- \[ \]/.test(readText(work,'BUILD_CHECKLIST.md'))) throw Error('Reviewer must write concrete unchecked fixes in BUILD_CHECKLIST.md');
   return 'BUILDER';
 }
+// Status feedback is also used by the CLI for infrastructure diagnostics.
+// Only explicitly recognized project guidance belongs in a worker prompt.
+export function workerHandoff(state) {
+  const text=state.feedback || '';
+  if(text.startsWith('User reopened this project at '))return text;
+  if(text.startsWith('Configured tests failed.'))return text;
+  if(/^Planner must create a useful (AGENTS|BUILD_PLAN)\.md$/.test(text))return 'The required planning files were not saved successfully. Use tools to write and read back AGENTS.md and BUILD_PLAN.md for the original request.';
+  if(text.startsWith('The previous builder stalled without useful progress.'))return 'Inspect existing files once and implement the smallest unfinished requirement. Preserve working files and report actual progress.';
+  if(/^The previous (PLANNER|BUILDER|REVIEWER) session lost its connection\./.test(text))return 'Partial files are preserved. Inspect existing work and continue without repeating completed edits.';
+  if(text.startsWith('The builder timed out. Partial files are preserved.') || /^Previous (PLANNER|BUILDER) reached its time limit\./.test(text)) {
+    const evidence=text.match(/(?:Observed verification failures:|Independent verification:)\s*([\s\S]*)$/)?.[1];
+    return 'Partial files are preserved. Inspect existing work and identify the remaining requirements. Do not assume the previous role finished.'+(evidence?'\nVerification evidence: '+evidence:'');
+  }
+  return '';
+}
+export function builderMode(state) {
+  if(['implementation','repair','user'].includes(state.builderMode))return state.builderMode;
+  if(state.feedback?.startsWith('User reopened this project at BUILDER.'))return 'user';
+  const source=[...(state.runs||[])].reverse().find(run=>run.status==='FINISHED' && run.next==='BUILDER' && ['PLANNER','REVIEWER'].includes(run.role));
+  return source?.role==='REVIEWER'?'repair':'implementation';
+}
 export function rolePrompt(state) {
-  const common=`You are the ${state.role} for Nova Conductor in a fresh 16K session. REQUEST.md is the read-only original request. Work within this project. Keep handoffs concise. No JSON report is required.\n`;
+  const request=state.prompt || 'Read REQUEST.md to obtain the original request before proceeding.';
+  const common=`Original user request (also saved in REQUEST.md):\n${request}\n\nYou are the ${state.role} for this project in a fresh session. The original request controls scope; planning documents must not expand or contradict it. Work in the current project directory using Codex tools and Windows PowerShell. Preserve REQUEST.md. Keep handoffs concise. No JSON report is required.\n`;
   const verification=state.config.verification.length ? `\nIndependent checks: ${JSON.stringify(state.config.verification)}.\n` : '';
-  const feedback=state.feedback ? `\nLatest handoff: ${state.feedback.slice(0,3500)}\n` : '';
+  const handoff=workerHandoff(state);
+  const feedback=handoff ? `\nProject guidance: ${handoff.slice(0,3500)}\n` : '';
   const roles={
-    PLANNER:'Write only AGENTS.md (project constraints, file conventions, and build/check commands) and BUILD_PLAN.md (requested requirements, ordered build steps, and suitable acceptance checks). Conductor owns role switching; do not invent agent profiles or teams. Do not build yet.',
-    BUILDER:'Read AGENTS.md, BUILD_PLAN.md, and any BUILD_CHECKLIST.md. Build the product; prioritize at most three checklist items per batch. Verify your changes, update checklist progress, and record results and remaining work in BUILD_NOTES.md. Preserve REQUEST.md, AGENTS.md, BUILD_PLAN.md, and REVIEW.md. Hand off when the batch is done or blocked.',
-    REVIEWER:"Inspect the product read-only against EVERY original requirement, using the build plan and available check evidence. Return your review as your final message: '# PASS' if verified, otherwise '# REVISE', then evidence and gaps. For REVISE add '## Checklist' with ordered '- [ ]' repair steps and verification. Conductor saves the review and checklist. Do not edit files. Distinguish required fixes from optional suggestions; the original request controls scope."
+    PLANNER:'Plan the requested product. Use file-writing tools to save only AGENTS.md (project constraints and file conventions) and BUILD_PLAN.md (concrete requested requirements, ordered implementation steps, and acceptance checks). In AGENTS.md, state that builders must not edit REQUEST.md, AGENTS.md, BUILD_PLAN.md, or REVIEW.md; generated-file lists, progress, and verification results belong in BUILD_NOTES.md, and repair progress belongs in BUILD_CHECKLIST.md. Inspect existing project files when relevant. Choose the simplest suitable implementation; include build commands only when needed and checks proportionate to the task. Do not invent requirements, agent teams, or placeholder plans. Do not build the product yet. Read back both saved files and confirm they match the request before handing off.',
+    BUILDER:'Read AGENTS.md, BUILD_PLAN.md, and any BUILD_CHECKLIST.md; inspect existing work. Use tools to implement the remaining requirements and reviewer repairs, following any latest user guidance. Continue until the requested work is complete or a concrete blocker prevents progress. Check the actual result with proportionate tests; use existing checks where suitable, without adding unnecessary testing infrastructure. Record generated files, verified results, and any unfinished work or blocker in BUILD_NOTES.md; update repair progress in BUILD_CHECKLIST.md. Do not edit REQUEST.md, AGENTS.md, BUILD_PLAN.md, or REVIEW.md, even if project notes ask you to record progress there. If the plan contradicts the request, report the conflict rather than implementing unrelated work.',
+    REVIEWER:"Inspect the actual product read-only against EVERY original requirement and the relevant build-plan checks. Read the files and independently check behavior with available tools; builder reports and passing tests alone do not prove completion. For visual work, inspect the rendered result when possible; state any verification you could not perform. Return '# PASS' only when all required work is verified, otherwise '# REVISE', followed by concise evidence and gaps. For REVISE add '## Checklist' with ordered '- [ ]' concrete repairs and how to verify each. Do not turn optional improvements into requirements. Do not edit files; Conductor saves your final response as the review and checklist."
   };
-  return common+roles[state.role]+verification+feedback;
+  const buildTask=state.role==='BUILDER' ? {
+    implementation:'\nBuild mode: initial implementation. Implement BUILD_PLAN.md, preserving any existing work. Complete the requested product and verify its acceptance checks.',
+    repair:'\nBuild mode: reviewer repairs. Read REVIEW.md and BUILD_CHECKLIST.md. Fix the listed gaps, preserve working behavior, and verify each repair. Then check the original requirements before handing back for review.',
+    user:'\nBuild mode: user-directed changes. Follow the user guidance in BUILD_CHECKLIST.md; it supersedes the previous review. Preserve working behavior and verify the requested changes.'
+  }[builderMode(state)] : '';
+  return common+buildTask+'\n'+roles[state.role]+verification+feedback;
 }
 export function roleInstructions(role, original) {
   if(role==='BUILDER') return original;
-  return `You are the Nova Conductor ${role.toLowerCase()} using Codex tools on Windows PowerShell. Follow the role's file boundaries and leave a concise Markdown handoff.`;
+  return `You are the project ${role.toLowerCase()} using Codex tools on Windows PowerShell. Follow the original user request and this role's file boundaries. Leave a concise Markdown handoff.`;
 }

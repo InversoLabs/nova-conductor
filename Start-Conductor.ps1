@@ -72,7 +72,7 @@ while($true){
     Write-Host 'Each role opens a fresh 16K session in the native Codex window.'
     $provider=(& node $cli provider | ConvertFrom-Json)
     Write-Host "New-project provider: $($provider.kind) at $($provider.baseUrl)"
-    Write-Host "1 New project  |  2 Continue  |  3 Status  |  4 Stop  |  5 Projects  |  6 Model ($model)  |  7 Reopen  |  8 Provider settings  |  9 Change project provider  |  Q Quit"
+    Write-Host "1 New project  |  2 Continue  |  3 Status  |  4 Stop  |  5 Projects  |  6 Model ($model)  |  7 Reopen  |  8 Provider settings  |  9 Change project provider  |  I Import existing codebase  |  Q Quit"
     try {
         switch((Read-Host 'Choose').ToUpperInvariant()){
             '1' {
@@ -125,6 +125,25 @@ while($true){
                     } finally {Remove-Item -LiteralPath $temp}
                     Start-Project $selected
                 }
+            }
+            'I' {
+                $source=(Read-Host 'Existing codebase folder to import').Trim().Trim('"')
+                if(-not(Test-Path -LiteralPath $source -PathType Container)){throw 'Choose an existing codebase folder.'}
+                $name=Read-Host 'Name for the new Conductor project'
+                if($name -notmatch '^[A-Za-z0-9][A-Za-z0-9 _-]{0,59}$'){throw 'Use letters, numbers, spaces or dashes.'}
+                $prompt=Read-Host 'What should the builder change or complete?'
+                if(-not $prompt.Trim()){throw 'Describe the requested work.'}
+                $model=Select-Model -Current $model
+                $root=Join-Path $projects ($name+'-'+[DateTime]::Now.ToString('yyyyMMdd-HHmmss'))
+                Write-Host 'Importing a separate working copy; the original folder stays unchanged.' -ForegroundColor Cyan
+                $temp=[IO.Path]::GetTempFileName()
+                try {
+                    [IO.File]::WriteAllText($temp,$prompt)
+                    & node $cli import $root $source $temp $model
+                    if($LASTEXITCODE -ne 0){throw 'Import failed; builder was not started.'}
+                } finally {Remove-Item -LiteralPath $temp}
+                Write-Host "Working copy: $root\work" -ForegroundColor Green
+                Start-Project $root
             }
             'Q' {exit}
         }

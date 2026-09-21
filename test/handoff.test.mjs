@@ -18,7 +18,7 @@ test('no universal test framework; missing review still cannot complete',async t
   const checks=await runChecks(root,[]);
   assert.equal(checks.configured,false);
   assert.throws(()=>nextPhase('REVIEWER',path.join(root,'work'),checks),/Reviewer/);
-  assert.match(rolePrompt({...s,role:'BUILDER'}),/at most three/);
+  assert.match(rolePrompt({...s,role:'BUILDER'}),/until the requested work is complete or a concrete blocker/);
 });
 
 test('old ten-minute projects migrate at startup while custom deadlines remain',async t=>{

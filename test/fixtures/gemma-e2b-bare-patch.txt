@@ -1,0 +1,42 @@
+*** Begin Patch
+*** Add File: AGENTS.md
++ # Nova Conductor Project Agents and Constraints
++
++ ## Project Constraints
++ 1. **Role Ownership:** Conductor maintains role switching; do not invent or modify agent profiles or teams.
++ 2. **Scope:** All operations must adhere strictly to the defined project scope and constraints outlined in this document.
++ 3. **Tool Usage:** Only use tools authorized by the Conductor role for file operations or external calls.
++
++ ## File Conventions
++ - **General:** All core project files should be version-controlled (Git).
++ - **Markdown Files:** Documentation (e.g., `README.md`, `AGENTS.md`, `BUILD_PLAN.md`) must use Markdown.
++ - **Configuration:** Environment-specific configurations should reside in dedicated files (e.g., `config/*.yaml`).
++ - **Scripts:** Executable build scripts must be clearly marked and contain only idempotent operations where possible.
++
++ ## Build and Check Commands
++ - **Build:** `./build.sh` (or equivalent specified in BUILD_PLAN).
++ - **Check:** `./test.sh` (or equivalent specified in BUILD_PLAN).
++ - **Lint:** `pylint` or equivalent static analysis tools should be run on Python files before commits.
+*** End Patch
+*** Add File: BUILD_PLAN.md
++ # Nova Conductor Build Plan
++
++ ## Requested Requirements
++ - **Core Functionality:** [Placeholder for specific project requirements, e.g., Implement Feature X, Integrate Component Y].
++ - **Architecture:** [Placeholder for required architectural constraints, e.g., Modular design, microservices approach].
++ - **Performance Target:** [Placeholder for desired performance metrics, e.g., API latency under 100ms].
++
++ ## Ordered Build Steps
++ 1. **Setup Environment:** Ensure all dependencies (Python versions, libraries, environment variables) are correctly installed.
++ 2. **Scaffold Core Structure:** Create the initial directory structure and place basic configuration files (`config/`, `agents/`).
++ 3. **Implement Agent Logic:** Develop the initial agents and define their interfaces as per the agent team structure.
++ 4. **Develop Core Services:** Implement the primary functional components of the Nova Conductor system.
++ 5. **Integration Testing:** Conduct unit tests for each major component and agent interaction.
++ 6. **System Build:** Execute the main build script to compile or package the application.
++
++ ## Acceptance Checks
++ - **Requirement Check:** Verify that all defined requirements listed in the "Requested Requirements" section are met.
++ - **Smoke Test:** Run a basic end-to-end test flow to ensure the application starts and basic operations execute without crashing.
++ - **Unit Test Coverage:** Achieve a minimum of 80% unit test coverage across critical components.
++ - **Integration Success:** Confirm that communication protocols between core services and agents are functioning correctly under simulated load.
+*** End Patch

@@ -1,3 +1,4 @@
+import {importProject} from './import-project.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { atomic, snapshot, assertRoleChanges, nextPhase, rolePrompt, roleInstructions, readText, saveReview, reviewDecision, normalizeReview } from './workflow.mjs';
@@ -38,6 +39,7 @@ export function reopen(root,feedback,role='BUILDER') {
     fs.writeFileSync(path.join(work,'BUILD_CHECKLIST.md'),'# User feedback\n\n'+feedback.trim()+'\n\n# Build Checklist\n\n- [ ] Address the user feedback above using the existing project, verify the changes, and hand off for review.\n');
     state.role=role;state.status='STOPPED';state.failures=0;state.disconnectFailures=0;state.busyRetries=0;state.deadlineRecoveries=0;state.stalledBuilds=0;state.nextRetryAt=null;state.lastBuildSignature=null;
     state.progressRecoveries=0;
+    if(role==='BUILDER')state.builderMode='user'; else if(role==='PLANNER')delete state.builderMode;
     state.config.maxRuns=Math.max(state.config.maxRuns,state.runs.length+10);
     state.feedback='User reopened this project at '+role+'. The previous review is superseded by this guidance; preserve existing work and follow your selected role:\n'+feedback.trim();
     state.expected=snapshot(work);atomic(stateFile,state);
@@ -224,6 +226,7 @@ export async function run(root,{visible=true,start=startServer,check=runChecks}=
         }
         if(stopped)throw Error('Stopped after verification; partial work preserved');
         state.feedback=checks && !checks.passed ? 'Configured tests failed. Fix them before completion.\n'+checks.results.filter(r=>!r.passed).map(r=>r.output).join('\n').slice(-3000) : '';
+        if(next==='BUILDER')state.builderMode=role==='REVIEWER'?'repair':'implementation';
         state.role=next;state.status=next==='COMPLETE'?'COMPLETE':'READY';state.failures=0;state.disconnectFailures=0;state.nextRetryAt=null;state.busyRetries=0;
         record.status='FINISHED';record.next=next;
       } catch(error) {
@@ -318,10 +321,11 @@ if(process.argv[1] && path.resolve(process.argv[1])===fileURLToPath(import.meta.
       }finally{if(held)fs.unlinkSync(lock);}
     }
     else if(command==='init') {initialize(root,fs.readFileSync(args[0],'utf8'),args[1]);console.log(path.resolve(root));}
+    else if(command==='import') {importProject(root,args[0],fs.readFileSync(args[1],'utf8'),args[2],initialize);console.log('Imported into '+path.resolve(root)+'; ready at BUILDER. Original folder unchanged.');}
     else if(command==='reopen') {const s=reopen(root,fs.readFileSync(args[1],'utf8'),args[0]);console.log('Reopened at '+s.role+'. Use run or Continue to start.');}
     else if(command==='run') {const s=await run(root,{visible:!args.includes('--headless')});console.log(`${s.status}: ${s.feedback||path.join(root,'work')}`);if(s.status!=='COMPLETE')process.exitCode=2;}
     else if(command==='stop') {if(!fs.existsSync(path.join(root,'state.json')))throw Error('Unknown project');fs.writeFileSync(path.join(root,'stop.request'),'stop');}
     else if(command==='status') {const s=JSON.parse(fs.readFileSync(path.join(root,'state.json')));console.log(JSON.stringify({status:s.status,role:s.role,runs:s.runs.length,feedback:s.feedback},null,2));}
-    else throw Error('Usage: conductor provider [ollama|lmstudio|custom|nova BASE_URL [KEY_ENV]] | models | set-provider PROJECT [MODEL] | init PROJECT PROMPT_FILE [MODEL] | reopen PROJECT ROLE FEEDBACK_FILE | run PROJECT [--headless] | stop PROJECT | status PROJECT');
+    else throw Error('Usage: conductor provider [ollama|lmstudio|custom|nova BASE_URL [KEY_ENV]] | models | set-provider PROJECT [MODEL] | init PROJECT PROMPT_FILE [MODEL] | import PROJECT SOURCE_FOLDER PROMPT_FILE [MODEL] | reopen PROJECT ROLE FEEDBACK_FILE | run PROJECT [--headless] | stop PROJECT | status PROJECT');
   }catch(error){console.error(error.message);process.exitCode=1;}
 }
