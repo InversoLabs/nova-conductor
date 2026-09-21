@@ -1,0 +1,9 @@
+{
+  "name": "nova-conductor",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {"node": ">=22"},
+  "files": ["src", "infrastructure", "test", "*.ps1", "*.cmd", "README.md"],
+  "scripts": {"test": "node --test test/*.test.mjs"}
+}

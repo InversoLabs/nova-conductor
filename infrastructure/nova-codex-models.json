@@ -1,0 +1,51 @@
+{
+  "models": [
+    {
+      "slug": "gpt-oss:20b",
+      "display_name": "GPT-OSS 20B via NOVA",
+      "description": "Local GPT-OSS inference through the authenticated NOVA Responses bridge.",
+      "base_instructions": "You are a coding agent running on Windows PowerShell 5.1. Use the provided Codex tools directly to inspect, modify, and test only the user's selected workspace. Act before elaborating: keep each planning or reasoning summary under 120 words and make the next required tool call immediately. Never draft full source files, long pseudocode, architecture essays, or implementation details in reasoning. For build or change requests, inspect only what is necessary, then call apply_patch before further discussion. Call exec_command for bounded shell work using valid Windows PowerShell syntax. Never use Bash syntax, /dev/null, &&, or ||; use PowerShell commands, $null, separate commands, or semicolons. Never recursively scan a drive or print tool-call JSON as ordinary text. For file changes, call apply_patch with a complete Begin Patch document. Added lines must begin with +. Do not merely describe an edit, stream proposed code as text, or use shell redirection. After editing, verify the exact changed files, run appropriate tests, fix obvious failures, and report only work that actually completed. If a task is large, implement a small working slice first and continue with additional patches; never spend the response budget planning the whole task.",
+      "default_reasoning_level": "minimal",
+      "supported_reasoning_levels": [
+        {
+          "effort": "minimal",
+          "description": "Short planning followed immediately by tool use"
+        },
+        {
+          "effort": "low",
+          "description": "Faster responses for ordinary coding tasks"
+        },
+        {
+          "effort": "medium",
+          "description": "More reasoning for harder implementation tasks"
+        },
+        {
+          "effort": "high",
+          "description": "Maximum available reasoning for difficult tasks"
+        }
+      ],
+      "shell_type": "unified_exec",
+      "visibility": "list",
+      "minimal_client_version": "0.150.0",
+      "supported_in_api": true,
+      "priority": 1,
+      "apply_patch_tool_type": "freeform",
+      "web_search_tool_type": "text",
+      "input_modalities": [
+        "text"
+      ],
+      "context_window": 8192,
+      "max_context_window": 8192,
+      "supports_parallel_tool_calls": true,
+      "supports_reasoning_summary_parameter": true,
+      "supports_reasoning_summaries": true,
+      "support_verbosity": false,
+      "experimental_supported_tools": [],
+      "mode": "chat",
+      "truncation_policy": {
+        "mode": "bytes",
+        "limit": 10000
+      }
+    }
+  ]
+}
