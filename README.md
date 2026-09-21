@@ -105,13 +105,19 @@ need to inspect behavior and acceptance requirements.
   guidance there to continue the same session. Closing the display alone does
   not stop the controller; use Stop.
 
-New projects allow sixty role sessions, ten minutes per role, three disconnect
+New projects allow sixty role sessions, 45 minutes per builder and 30 minutes
+per planner/reviewer, three disconnect
 recoveries, and three builder deadline recoveries. A timed-out reviewer stops
 for attention. Disconnect retries preserve partial files and start a fresh role
 session after 5, 10, and 20 seconds. The proxy does not replay partial streams.
 Role/file boundaries and outside edits are checked; unexpected changes are
 preserved and stop the run. The app-server/remote interface is experimental;
 use the tested Codex version when diagnosing regressions.
+
+Existing projects using the old ten-minute default migrate to these longer
+deadlines on their next run. Already-running controllers must be stopped and
+restarted to load the update. Custom deadlines remain unchanged. These are
+role deadlines, separate from provider/network disconnect handling.
 
 ## CLI
 

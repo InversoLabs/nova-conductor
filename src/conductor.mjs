@@ -14,7 +14,7 @@ export function initialize(root,prompt,model='gpt-oss:20b',verification=[]) {
   fs.mkdirSync(path.join(root,'work'),{recursive:true}); fs.mkdirSync(path.join(root,'runs'));
   fs.writeFileSync(path.join(root,'work','REQUEST.md'),prompt);
   const state={version:1,prompt,role:'PLANNER',status:'READY',runs:[],feedback:'',failures:0,
-    config:{model,provider:loadProvider(),contextTokens:16384,port:8799,maxRuns:60,maxFailures:2,roleTimeoutMs:10*60*1000,verification},expected:snapshot(path.join(root,'work'))};
+    config:{model,provider:loadProvider(),contextTokens:16384,port:8799,maxRuns:60,maxFailures:2,roleTimeoutMs:30*60*1000,builderTimeoutMs:45*60*1000,verification},expected:snapshot(path.join(root,'work'))};
   atomic(path.join(root,'state.json'),state); return state;
 }
 function log(root,type,data={}) { fs.appendFileSync(path.join(root,'events.jsonl'),JSON.stringify({at:new Date().toISOString(),type,...data})+'\n'); }
@@ -58,6 +58,11 @@ export async function run(root,{visible=true,start=startServer,check=runChecks}=
   fs.writeFileSync(lock,String(process.pid),{flag:'wx'});
   let server, stopped=false, active, watcher;
   const state=JSON.parse(fs.readFileSync(stateFile,'utf8'));
+  // Migrate the former default only; retain explicitly customized deadlines.
+  if(state.config.roleTimeoutMs===10*60*1000){
+    state.config.roleTimeoutMs=30*60*1000;
+    state.config.builderTimeoutMs ??= 45*60*1000;
+  }
   state.config.disconnectRetries ??= 3;
   state.config.retryDelayMs ??= 5000;
   state.disconnectFailures ??= 0;
@@ -126,7 +131,8 @@ export async function run(root,{visible=true,start=startServer,check=runChecks}=
         let reviewClarifications=0;
         const completion=new Promise((resolve,reject)=>{
           const deadline=()=>{ if(active)server.connection.request('turn/interrupt',active).catch(()=>{}); cleanup();reject(Error('Role deadline exceeded; partial files preserved'));};
-          let timer=setTimeout(deadline,state.config.roleTimeoutMs);
+          const timeoutMs=role==='BUILDER' ? (state.config.builderTimeoutMs ?? state.config.roleTimeoutMs) : state.config.roleTimeoutMs;
+          let timer=setTimeout(deadline,timeoutMs);
           const cancelled=()=>{cleanup();reject(Error('Stopped; partial work preserved'));};
           const disconnect=()=>{cleanup();reject(Error('Codex disconnected'));};
           const notice=event=>{
@@ -136,7 +142,7 @@ export async function run(root,{visible=true,start=startServer,check=runChecks}=
             if(event.method==='turn/started') {
               active={threadId:record.threadId,turnId:p.turn.id};record.turnEnded=false;
               if(state.status==='PAUSED') {
-                state.status=role;save();timer=setTimeout(deadline,state.config.roleTimeoutMs);
+                state.status=role;save();timer=setTimeout(deadline,timeoutMs);
                 log(root,'role.resumed',{id,role});
               }
             }
